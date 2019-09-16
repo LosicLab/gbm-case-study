@@ -1,0 +1,906 @@
+---
+title: "Immune Profiling"
+author: "Paula Restrepo"
+output:
+  html_document:
+    fig_height: 10
+    fig_width: 15
+    highlight: kate
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+libs <- c('tidyverse', 'ggbeeswarm','ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'tcR', 'corrplot', 'edgeR', 'limma', 'ggradar', 'MESS', 'pbmcapply')
+lapply(libs, library, character.only=TRUE)
+rm(libs)
+
+cbpal <-  c("#CC79A7", # purple, primary
+            "#E69F00", # yellow, A
+            "#56B4E9", # blue, B
+            "#009E73", # green, C
+            "#7f7f7f") #gray, tcga
+
+# set up themes for ggplotting
+theme <- theme(text = element_text(size=16),
+               axis.text.y = element_text(size=18, face='bold'),
+               axis.text.x = element_text(size=18, face='bold'),
+               axis.title = element_text(size=20, face = "bold"),
+               legend.text= element_text(size=18),
+               legend.title= element_text(size=20, face='bold'),
+               strip.text=element_text(size=24, face='bold'))
+
+# load in data
+#load('data/vdj_mixcr_outputs.rdata')
+load("data/case.resections.RData")
+
+# function box
+extract.vaf <- function(var.table, AD.col='gt_AD') {
+    var.table <- tidyr::separate(var.table, AD.col, c("AD_N", "AD_T"), sep=",")
+    var.table[, c("AD_N", "AD_T")] <- lapply(var.table[, c("AD_N", "AD_T")], as.numeric)
+    var.table$VAF_AD <- 100 * ( var.table$AD_T / (var.table$AD_N + var.table$AD_T) )
+    return(var.table)
+}
+
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+case.rawcounts <- cpm(readRDS('data/raw_unfiltered_caseStudy_counts_matrix.RDS'))
+case.genes <- data.frame(ensid=rownames(case.rawcounts),
+                         gene_symbol=mapIds(org.Hs.eg.db, keys=rownames(case.rawcounts), keytype='ENSEMBL', column='SYMBOL', multivals='first'))
+rownames(case.genes) <- case.genes$ensid
+```
+
+
+## Mixcr clonal analysis
+
+
+```{r message=FALSE, warning=FALSE}
+vdj_list <- list.files(path='raw_data/mixcr/RNA', pattern="*clones.clns.txt")
+idata_all_models <- parse.folder('raw_data/mixcr/RNA', 'mixcr')
+
+samples <- gsub(x=vdj_list, pattern="_clones.clns.txt", replacement='')
+
+names(idata_all_models) <- samples
+
+# get total read counts from exprs data to normalize vdj
+total_reads <- as.numeric(colSums(case.rawcounts[, c(4, 1:3)]))
+
+checkpoint.genes <- c('TIM3', 'HAVCR2', 'GMZA','CD208','LAMP3', 'CD28', 'CD3D', 
+'CD3G', 'CD3E', "PDCD1LG2", 
+'CD274', 'PDCD1LG1', 'PDL1', "FOXP3", 'CD20', 'MS4A1', 'CD68', 'CD3E', 'CD3D', 
+'CD34', 'CD38', 'CD68', 'LAMP4', 
+'SCARD1', 'GP110', 'CD4', 'PDCD1', 'CD274', 'IL2', "CD14","CD16",
+"CD64","CD71", "CCR4", 'CCR5', 
+"CD4","CD25","CD127", "IL6", "IL10", "IL12","STAT4", "STAT6", "STAT3", "IL4", "IL17"   )
+
+# CD274 is PD-L1; PDCD1 is PD-1; MS4A1 is CD20
+gdf <- as.data.frame(case.rawcounts[, 1:4])
+#colnames(gdf) <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
+
+gdf$ensid <- rownames(gdf)
+gdf <- gdf %>%
+  inner_join(case.genes, by=c('ensid')) %>%
+  filter(gene_symbol %in% checkpoint.genes)
+
+gdf$gene_symbol <- as.factor(as.character(gdf$gene_symbol))
+gdf$ensid <- as.factor(as.character(gdf$ensid))
+
+#levels(gdf$gene_symbol) <- c('PDL1', 'CD28', 'CD34', 'CD38', 'CD3D', 'CD3E', 'CD3G', 'CD4', 'CD68', 'FOXP3', 'TIM3', 'DCLAMP', 'CD20', 'PD1', 'PDL2')
+
+# test <- as.data.frame(t(as.data.frame(gdf[, 1:4])))
+# colnames(test) <- gdf$gene_symbol
+
+# # only use CD3D since it is consistently the median of the expression for CD3 subunits
+# test <- as.data.frame(test[, c("CD20","CD3D","CD68","PDL1")])
+# colnames(test)[2] <- 'CD3'
+# #test$sample <- rownames(test)
+# test$PDL1_CD68 <- (test$PDL1 * test$CD68)^(1/2)
+# test <- as.data.frame(t(test))
+# test$gene_symbol <- rownames(test)
+
+
+# test2 <- as.data.frame(t(test[,1:4]))
+# test2$sample <- rownames(test2)
+# test2 <- test2[, c('sample', 'CD20','CD3','CD68','PDL1','PDL1_CD68')]
+# # test2[,c('CD20','CD3','CD68','PDL1','PDL1_CD68')] <- lapply(test2[,c('CD20','CD3','CD68','PDL1','PDL1_CD68')],function(x){x/100})
+
+
+
+
+gdf_long<- gdf %>% 
+  tidyr::gather(sample, cpm, c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')) %>%
+  mutate(sample=fct_relevel(sample, c('Primary','Recurrent_A', 'Recurrent_B', 'Recurrent_C')) )
+#rm(test)
+
+# integrate IHC quantification (cell percentages)
+idata_stats <- as.data.frame(repseq.stats(idata_all_models))
+
+ihc_results <- read_csv('raw_data/ihc.results.csv')
+#colnames(ihc_results) <-c('marker', 'num_pos_cells', 'num_detections', 'pos_cells_per_mm2', 'percent_pos_cells', 'area_px2', 'area_mm2', 'area_um2', 'sample')
+ihc_results2 <- ihc_results %>%
+  filter(variable=='percentage') %>%
+  dplyr::select(sample, cell_type, value)# %>%
+  #tidyr::spread(marker, value) %>% 
+  #as.data.frame() 
+
+ihc_res <- ihc_results2 %>%
+filter(!cell_type %in% c('DC-LAMP+', 'CD3+FOXP3+'))
+
+ihc_res$cell_type <- factor(as.character(ihc_res$cell_type), levels=rev(c('CD3+','CD20+',"CD68+","PDL1+")))
+
+colors <- c("255 250 75", # CD3
+ "253 43 49", # CD20
+ "56 253 254", # CD68
+ "249 74 245" # PDL1
+ )
+
+colors <- sapply(strsplit(colors, " "), function(x)
+    rgb(x[1], x[2], x[3], maxColorValue=255))
+
+ihc_barplot2 <- ggplot(data=ihc_res) + 
+aes(x=cell_type, y=value*100, fill=cell_type) +
+geom_bar(position='dodge', stat='identity') + 
+theme_classic() + theme +
+theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()) +
+facet_wrap(~sample, ncol=1) +
+scale_fill_manual(values = rev(colors)) +
+labs(y='percent (%)', x='', title='') + coord_flip()
+
+#ihc_barplot2
+saveRDS(ihc_barplot2, file='ihc_barplot2_verticalFiltered.RDS')
+
+tmp <- gdf_long %>% dplyr::select(sample, gene_symbol, cpm) %>%
+  tidyr::spread(sample, cpm) %>% as.data.frame()
+
+# rownames(tmp) <- tmp$gene_symbol
+# tmp$gene_symbol <- NULL
+# tmp <- as.data.frame(t(tmp))
+# colnames(tmp) <- paste0('rnaseq_',colnames(tmp),'_cpm')
+
+# #tmp$sample <- rownames(tmp)
+
+# idata_stats <- cbind(idata_stats, tmp)
+# idata_stats$total_lib_size <- total_reads
+# idata_stats$norm_vdj_readcount <- idata_stats$Sum.reads / total_reads
+# c <- idata_stats %>% dplyr::select(-sample, -Reads.per.UMI)
+cordf <- cor(c, method='spearman')
+p.mat <- cor.mtest(c, method = "spearman")
+```
+
+
+### show clones per read as a QC measure
+
+```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+cpr <- ggplot(data=idata_stats) + 
+  aes(x=Clones, y=Sum.reads, color=UMI.per.clone, label=sample) +
+  geom_point(alpha=0.7, size=3) + geom_abline() +
+  geom_label_repel(size=6, show.legend=FALSE) + 
+  theme_classic() + theme + labs(title = 'A) Reads per clone') +
+  scale_colour_gradient(low = "aquamarine", high = "tomato") 
+
+cpr_norm <- ggplot(data=idata_stats) + 
+  aes(x=Clones, y=norm_vdj_readcount, color=UMI.per.clone, label=sample) +
+  geom_point(alpha=0.7, size=3) + geom_abline() +
+  geom_label_repel(size=6, show.legend=FALSE) + 
+  theme_classic() + theme + labs(title = 'B) Normalized reads per clone') +
+  scale_colour_gradient(low = "aquamarine")
+
+clones_per_read <- ggarrange(cpr, cpr_norm, common.legend=TRUE, legend = 'right')
+clones_per_read
+```
+
+### show IHC scores
+
+```{r fig.height=10, fig.width=10}
+
+sum(ihc_results$percent_pos_cells)
+ihc_perc <- ggplot(data=ihc_results) + 
+  aes(x='', y=percent_pos_cells,color=marker, fill=marker) +
+  geom_bar(stat='identity') +
+  # geom_point(alpha=0.7) + 
+  # geom_label_repel(size=5, show.legend=FALSE, force=5, min.segment.length = 10,segment.size = 1, max.iter = 10000) + 
+  facet_wrap(~sample, ncol=2) +
+  theme_classic() + # theme +
+  theme(axis.title.y=element_blank(), legend.position = 'right') +
+  labs(y='Percent (%) Positive Cells') +
+  coord_polar("y", start=0)
+
+  # coord_flip() # +
+  # scale_color_manual(values = cbpal)
+
+ihc_perc
+
+cpm_cts <- ggplot(data=gdf_long) + 
+  aes(x=gene_symbol, y=cpm, color=gene_symbol, fill=gene_symbol) +
+  # geom_point(alpha=0.7, size=3) +  
+  # geom_label_repel(size=5, show.legend=FALSE, force=5, min.segment.length = 10,segment.size = 1, max.iter = 10000) + 
+  geom_bar(stat='identity', position='dodge') +
+  facet_wrap(~sample, ncol=1) +
+  theme_classic() + theme +
+  theme(axis.title.y=element_blank(), axis.text.y=element_blank(), legend.position = 'right') +
+  labs(y='CPM') +
+  coord_flip()
+  # scale_color_manual(values = cbpal)
+
+cpm_cts
+
+
+
+imm_quant <- ggarrange(ihc_perc, cpm_cts, ncol=2, align='hv', common.legend=TRUE, legend='right')
+
+
+png('figures/S2A-B_ihc_scatters_v2.png', height=30, width=15, units='in', res=350)
+imm_quant
+dev.off()
+
+
+
+
+png('figures/S3A_IHC_PERC_min0max25_radarPlot.png', height=8, width=16, units='in', res=300)
+
+ggradar(plot.data=ihc_results3, grid.min=0, grid.mid=10, grid.max=25, grid.label.size = 7, group.line.width = 1,
+                    group.point.size = 3, axis.label.size = 6, group.colours=cbpal[1:4], 
+                    values.radar = c("0%", "12.5%", "25%"),  background.circle.colour = "#ffffff",
+                    legend.text.size = 20)
+
+dev.off()
+
+
+png('figures/S3B_CPMRNASEQ_min0max20_radarPlot.png', height=8, width=16, units='in', res=300)
+ggradar(plot.data=test2, grid.min=0, grid.mid=7.5, grid.max=15, grid.label.size = 7, group.line.width = 1,
+                    group.point.size = 3, axis.label.size = 6, group.colours=cbpal[1:4], 
+                    values.radar = c("0 CPM", "7.5 CPM", "15 CPM"),  background.circle.colour = "#ffffff",
+                    legend.text.size = 20)
+dev.off()
+```
+
+
+
+### correlate mixcr results with IHC quantification
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+png('figures/markers_correlation_map.png', height=18, width=18, units='in', res=150)
+corrplot(cordf,method='color',type="upper", addCoef.col = "black", diag=FALSE, tl.col='black', order='hclust', tl.srt = 45, col = brewer.pal(n = 8, name = "RdYlBu"))
+dev.off()
+```
+
+
+
+### show total reads per sample
+
+```{r fig.height=10, fig.width=12}
+tbl <- as.data.frame(total_reads)
+tbl$sample <- rownames(tbl)
+
+tr <- ggplot(data=tbl) + aes(x=sample, y=total_reads, fill=sample) + 
+  geom_bar(stat='identity', show.legend=FALSE) + theme_classic() + 
+  labs(y='total library size (reads)',x='', title='A) Library size per sample') +
+  rotate_x_text(angle=45) +
+  scale_fill_manual(values = cbpal)
+
+tn_vdj<- ggplot(data=idata_stats) + aes(x=sample, y=norm_vdj_readcount, fill=sample) + 
+  geom_bar(stat='identity', show.legend=FALSE) + theme_classic() +
+  labs(y='sum normalized vdj reads',x='', title='C) Total normalized VDJ reads per sample') + rotate_x_text(angle=45) +
+  scale_fill_manual(values = cbpal)
+
+t_vdj <- ggplot(data=idata_stats) + 
+  aes(x=sample, y=Sum.reads, fill=sample) + 
+  geom_bar(stat='identity', show.legend=FALSE) +
+  theme_classic() +
+  labs(y='sum vdj reads',x='', title='B) Total VDJ reads per sample') + rotate_x_text(angle=45) +
+  scale_fill_manual(values = cbpal)
+
+
+ggarrange(tr, t_vdj, tn_vdj, nrow=3, common.legend = TRUE, legend = 'bottom')
+```
+
+
+
+```{r }
+vdj_df <- do.call(rbind, lapply(names(idata_all_models), function(y){
+  x <- idata_all_models[[y]]
+  x$cell_type <- x$V.gene
+  x$cell_type[grepl(pattern = 'TR', x=x$V.gene)] <- 'T-cell'
+  x$cell_type[grepl(pattern = 'IG', x=x$V.gene)] <- 'B-cell'
+  x$chain_type <- x$V.gene
+  x$chain_type[grepl("IGK", x$V.gene)] <- "Kappa"
+  x$chain_type[grepl("IGL", x$V.gene)] <- "Lamba"
+  x$chain_type[grepl("TRB", x$V.gene)] <- "Beta"
+  x$chain_type[grepl("TRA", x$V.gene)] <- "Alpha"
+  x$chain_type <- as.character(x$chain_type)
+  x$sample <- y
+  #x$total.library.size <- total_reads[y]
+  
+  x$clone_type <- cut(x$Read.proportion, breaks=c(0, 0.005, 0.001, 0.01, 0.1, 1), include.lowest = TRUE, labels=c('Rare: 0<x<=0.005', 'Small: 0.005<x<=0.001', 'Medium: 0.001<x<=0.01', 'Large: 0.01<x<=0.1', 'HyperExpanded: 0.1<x<=1'))
+  x$sample_celltype <- paste0(x$sample, '_', x$cell_type)
+  return(x)
+}))
+
+
+vdj_summary <- vdj_df %>% group_by(sample, cell_type) %>%
+  summarise(sum.reads.celltype=sum(Read.count), sum.celltype.proportion=sum(Read.proportion)) %>%
+  inner_join(idata_stats, by=c('sample')) %>%
+  mutate(celltype.norm.reads=sum.reads.celltype/1e6)
+
+vdj_summary
+```
+
+
+
+
+```{r fig.height=8, fig.width=12}
+ggplot(data=vdj_summary) +
+    aes(x=sample,y=celltype.norm.reads, fill=cell_type) +
+    geom_bar(stat='identity', show.legend=FALSE) +
+    theme_classic() +
+    theme +
+    facet_wrap(~cell_type, nrow=1, scales='free') +
+  labs(x='', y='Read Count', title='VDJ read abundance by cell-type')
+```
+
+
+
+```{r }
+
+bdf <- vdj_summary %>% 
+  dplyr::select(sample, cell_type, sum.celltype.proportion, histo_CD20_percent, rnaseq_CD20_l2cpm) %>%
+  filter(cell_type == 'B-cell') %>% mutate(sum.celltype.proportion=sum.celltype.proportion*100) %>%
+  tidyr::gather(marker, value, c("sum.celltype.proportion", "histo_CD20_percent", "rnaseq_CD20_l2cpm")) %>%
+  mutate(marker=as.factor(marker))
+
+tdf <- vdj_summary %>% 
+  dplyr::select(sample, cell_type, sum.celltype.proportion,histo_CD3_percent, rnaseq_CD3D_l2cpm, rnaseq_CD3E_l2cpm, rnaseq_CD3G_l2cpm) %>%
+  filter(cell_type == 'T-cell') %>%
+  mutate(rnaseq_CD3_gmean=prod(rnaseq_CD3E_l2cpm, rnaseq_CD3D_l2cpm, rnaseq_CD3G_l2cpm)^(1/3),
+         sum.celltype.proportion=sum.celltype.proportion*100) %>%
+  dplyr::select(-rnaseq_CD3E_l2cpm, -rnaseq_CD3D_l2cpm, -rnaseq_CD3G_l2cpm) %>%
+  tidyr::gather(marker, value, c("sum.celltype.proportion", "histo_CD3_percent", "rnaseq_CD3_gmean"))  %>%
+  mutate(marker=as.factor(marker))
+
+levels(tdf$marker) <- c('IHC', 'RNAseq', 'VDJ')
+levels(bdf$marker) <- c('IHC', 'RNAseq', 'VDJ')
+
+sumdf <- rbind(tdf, bdf)
+rm(tdf, bdf)
+```
+
+
+
+```{r fig.height=5, fig.width=10}
+
+lines <- ggplot(data=sumdf) +
+    aes(x=sample,y=value, color=marker, group=marker) +
+    geom_point(size=4) + geom_line() +
+    theme_classic() + theme + 
+    #theme(axis.title.x=element_blank(), axis.text.x=element_blank()) + 
+    scale_color_brewer(palette = 'Dark2', ) +
+    facet_wrap(~cell_type, nrow=1, scales='free') +
+  labs(x='', y='Percent (%)', title='',  color='marker type')
+lines
+```
+
+
+
+### show clonal homeostasis
+
+```{r fig.height=8, fig.width=15}
+
+immhomm <- vdj_df %>% 
+  group_by(clone_type, sample, cell_type) %>%
+  summarise(sum.reads.celltype=sum(Read.count)) %>%
+  inner_join(idata_stats, by=c('sample')) %>%
+  mutate(sum.normalized.reads=sum.reads.celltype/1e6,
+  normalized_cpm=sum.normalized.reads/1e6,
+  cpm=sum.reads.celltype/1e6) 
+
+clonal_homeostasis <- ggplot(data=immhomm) +
+    aes(x=sample,y=cpm, fill=clone_type) +
+    geom_bar(stat='identity') +
+    theme_classic() +
+    theme +  theme(axis.title.x=element_blank(), axis.text.x=element_blank()) +
+    facet_wrap(~cell_type, ncol=2, scales='free') +
+    scale_fill_manual(values=brewer.pal(5, name = "YlGnBu")) +
+  labs(x='', y='CPM', title='A)')
+
+immhommBcellsOnly <- immhomm %>% filter(cell_type=='B-cell')
+
+clonal_homeostasis_norm <- ggplot(data=immhommBcellsOnly) +
+    aes(x=sample,y=cpm, fill=clone_type) +
+    geom_bar(stat='identity') +
+    theme_classic() +
+    theme + theme(legend.position='right') +
+    scale_fill_manual(values=brewer.pal(5, name = "YlGnBu")) +
+    labs(x='', y='CPM') +
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+    #coord_flip()
+
+ggarrange(clonal_homeostasis, clonal_homeostasis_norm, nrow=2, align='v', common.legend = TRUE, legend = 'right', heights=c(1,1.5))
+
+
+png('~/Google_Drive/LosicLab/manuscripts/GBM heterogeneity/figures/raw_img/3D_vdjBcells_plots.png', height=8, width=9, units='in', res=300)
+clonal_homeostasis_norm
+dev.off()
+```
+
+
+## NetMHC Neoantigen Prediction
+
+### Parse topiary outputs
+
+```{r message=FALSE, warning=FALSE}
+load('data/somatic_mutations.rdata')
+rownames(somatic_mutations) <- 1:nrow(somatic_mutations)
+somatic_mutations <- extract.vaf(somatic_mutations)
+
+# define a column for mutation editing, as primary-loss, or recurrent-gain
+tmp1 <- somatic_mutations %>%
+  filter(sample == 'Primary') %>% dplyr::select(variant) %>% deframe()
+
+tmp2 <- somatic_mutations %>%
+  filter(! variant %in% tmp1) %>% dplyr::select(combo) %>% deframe()
+
+tmp3 <- somatic_mutations %>%
+  filter(sample != 'Primary') %>% dplyr::select(variant) %>% deframe()
+
+tmp4 <- somatic_mutations %>%
+  filter(! variant %in% tmp3) %>% dplyr::select(combo) %>% deframe()
+
+somatic_mutations$is_edited <- as.factor(as.logical(somatic_mutations$combo %in% tmp2))
+levels(somatic_mutations$is_edited) <- c("no", "recurrent")
+somatic_mutations$is_edited <- as.character(somatic_mutations$is_edited)
+
+somatic_mutations$recurrent_gain <- as.logical(somatic_mutations$combo %in% tmp4)
+tmp5 <- (somatic_mutations$is_edited == "no") & (somatic_mutations$recurrent_gain == TRUE)
+somatic_mutations[tmp5,]$is_edited <- "primary"
+somatic_mutations$is_edited <- as.factor(somatic_mutations$is_edited)
+somatic_mutations$recurrent_gain <- NULL
+
+
+summary(somatic_mutations[somatic_mutations$is_neoantigen == TRUE,]$is_edited)
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+path <-"raw_data/topiary/dna"
+
+flist <-  list.files(path=path, pattern = "*.csv$", full.names = TRUE)
+
+# import epitope data
+epitope.list <- lapply(flist, function(x){
+    x %>% read_csv() %>% as_tibble() %>%
+        mutate(vcf_file=gsub(x=gsub(x=x, pattern=paste0(path, '/'), replacement=''),
+                             pattern='_topiaryResults.csv', replacement='')) %>%
+        mutate(sample=gsub(x=`vcf_file`, pattern='_filtered.vcf', replacement=''))
+})
+
+
+# do some data munging to get it tidy
+epitope.df <- do.call(rbind, epitope.list) %>%
+    as_tibble() %>%
+    mutate(sample=as.factor(sample))
+
+# select for true-somatic variant calls
+somatic_samples <- c("10647A_AAGGTACA_HN2TGBGX7_vs_9260B_Blood_CCTAATCC_HN2TGBGX7",
+                     "10647B_CGCTGATC_HN2TGBGX7_vs_9260B_Blood_CCTAATCC_HN2TGBGX7",
+                     "10647C_GGTGCGAA_HN2TGBGX7_vs_9260B_Blood_CCTAATCC_HN2TGBGX7",
+                     '9260B_CATCAAGT_HN2TGBGX7_vs_9260B_Blood_CCTAATCC_HN2TGBGX7')
+
+epitope.df <- epitope.df %>%
+    mutate(variant=factor(gsub(x=variant,
+                               pattern=' g.', replacement=':', fixed=TRUE)),
+           combo=as.factor(paste(`sample`, `variant`, sep='_'))) %>% ## this is what we merge on!!
+  filter(sample %in% somatic_samples)
+
+# tidy sample levels
+epitope.df$sample <- as.factor(as.character(epitope.df$sample))
+levels(epitope.df$sample) <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
+
+somatic_samples <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
+
+# tidy variant notation so that insertions and deletions merge properly 
+deletions <- grep('del',epitope.df$variant)
+inserts <- grep('ins',epitope.df$variant)
+others <- grep('>', epitope.df$variant)
+epitope.df$combo_pos <- NA
+epitope.df$combo_chr <- gsub(":.*","",epitope.df$variant)
+epitope.df[deletions,]$combo_pos <- as.numeric(gsub("_.*","",gsub(".*:","",epitope.df[deletions,]$variant)))
+epitope.df[inserts,]$combo_pos <- as.numeric(gsub("_.*","",gsub(".*:","",epitope.df[inserts,]$variant)))
+epitope.df[others,]$combo_pos <- as.numeric(gsub("[A-Z]>.*","",gsub(".*:","",epitope.df[others,]$variant)))
+epitope.df[deletions,]$combo_pos <- epitope.df[deletions,]$combo_pos-1
+epitope.df$combo <- paste0(epitope.df$sample,"_",epitope.df$combo_chr, ":",epitope.df$combo_pos)
+somatic_mutations$combo <- paste0(somatic_mutations$sample, '_', somatic_mutations$CHROM, ':', somatic_mutations$POS)
+
+vcf_master_epitope <- epitope.df %>%
+  dplyr::select(-variant, -sample, ) %>% 
+  inner_join(somatic_mutations, by=c("combo")) ## only keep epitopes that come from a mutation passing
+                                               ## the variant call filters
+```
+
+
+
+## Select epitopes to plot
+
+```{r }
+plotdf <- vcf_master_epitope[!is.na(vcf_master_epitope$sample) & !is.na(vcf_master_epitope$ic50), ]
+
+plotdf$effect_type <- as.factor(plotdf$effect_type)
+plotdf$allele <- as.factor(plotdf$allele)
+
+somatic_epitopes <- plotdf
+
+top_epitopes <- plotdf[plotdf$ic50 < 25 | plotdf$VAF_AD > 10 ,]
+top_epitopes <- rbind(top_epitopes[top_epitopes$sample != 'Primary', ], top_epitopes[top_epitopes$sample == 'Primary' & (top_epitopes$VAF_AD > 50 | top_epitopes$ic50 < 150),])
+top_epitopes <- rbind(top_epitopes[top_epitopes$sample != 'Recurrent_B', ], top_epitopes[top_epitopes$sample == 'Recurrent_B' & (top_epitopes$VAF_AD > 27 | top_epitopes$ic50 < 150),])
+top_epitopes <- rbind(top_epitopes[top_epitopes$sample != 'Recurrent_A', ], top_epitopes[top_epitopes$sample == 'Recurrent_A' & (top_epitopes$VAF_AD > 25 | top_epitopes$ic50 < 150),])
+
+top_epitopes <- rbind(top_epitopes[top_epitopes$sample != 'Recurrent_C', ], top_epitopes[top_epitopes$sample == 'Recurrent_C' & (top_epitopes$VAF_AD > 11 | top_epitopes$ic50 < 150),])
+
+top_epitopes <- top_epitopes[!is.na(top_epitopes$sample) & !is.na(top_epitopes$ic50), ]
+top_epitopes <- top_epitopes[top_epitopes$AD_T > 10, ]
+```
+
+
+## plot a scatter of putatively immunogenic neoantigens
+
+```{r fig.height=12, fig.width=15, message=FALSE, warning=FALSE}
+neoantigen_scatter <- ggplot(plotdf) + 
+  aes(x=log(ic50), y=VAF_AD, color = allele, size=AD_T) +
+  geom_jitter(alpha=0.7) + 
+  geom_label_repel(data = top_epitopes, aes(label = gene), size = 3, force=3, show.legend = FALSE ) +
+  geom_vline(xintercept=log(500), linetype="dashed") + 
+  facet_wrap(. ~ sample, nrow=2, scales = 'free') +
+  labs(x="Binding Affinity: log(ic50)", y='VAF') +
+  theme_classic() +
+  theme +
+  guides(color = guide_legend(override.aes = list(size=5))) +
+  scale_color_brewer(palette = 'Spectral')
+
+neoantigen_scatter
+```
+
+
+
+### Show which allele is the most common in the global population
+
+source table for the patient's alleles taken from http://www.allelefrequencies.net/
+
+```{r message=FALSE, warning=FALSE}
+allele_pop_freq <- read_csv('tables/pt_allele_global_pop_frequencies.csv')
+colnames(allele_pop_freq) <- c('allele', 'population', 'percent_indiv_with_allele', 'allele_frequency', 'sample_size', 'location')
+
+allele_pop_freq <- allele_pop_freq %>% group_by(allele) %>% summarise(mean_popAF=mean(allele_frequency))
+# Summary of mean global population allele frequency
+allele_pop_freq
+
+
+# The most common allele is therefore...
+allele_pop_freq[allele_pop_freq$mean_popAF == max(allele_pop_freq$mean_popAF), ]
+```
+
+
+## summarise neoantigens as an "immunoprint"
+
+
+```{r }
+waterfall_df <- somatic_mutations %>% as_tibble() %>%
+  mutate(variant_class=ExonicFunc_refGene)
+
+waterfall_df[waterfall_df$variant_class == '.',]$variant_class <- waterfall_df[waterfall_df$variant_class == '.',]$Func_refGene
+
+waterfall_df <- waterfall_df %>% dplyr::select(CHROM, POS, REF, ALT, Gene_refGene, variant_class, sample, is_neoantigen, is_edited)
+colnames(waterfall_df) <- c('chr', 'pos', 'ref', 'alt', 'gene', 'variant_class', 'sample', 'is_neoantigen', "is_edited")
+
+variant_priority <- levels(factor(waterfall_df$variant_class))[c(2,3,8,9,12,11,10,13,1,14:16,4,5:7)]
+waterfall_df$translational_effect <- 'non_silent'
+waterfall_df[waterfall_df$variant_class %in% variant_priority[8:16], ]$translational_effect <- 'silent'
+
+tmb_df <- waterfall_df %>% group_by(sample, is_neoantigen) %>%
+  summarise(count=n(),tmb=count/54)
+
+tmb_df$sample <-  fct_relevel(tmb_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
+```
+
+
+
+
+```{r }
+waterfall_df <- somatic_mutations %>% as_tibble() %>%
+  mutate(variant_class=ExonicFunc_refGene)
+
+waterfall_df[waterfall_df$variant_class == '.',]$variant_class <- waterfall_df[waterfall_df$variant_class == '.',]$Func_refGene
+
+waterfall_df <- waterfall_df %>% dplyr::select(CHROM, POS, REF, ALT, Gene_refGene, variant_class, sample, is_neoantigen, is_edited)
+colnames(waterfall_df) <- c('chr', 'pos', 'ref', 'alt', 'gene', 'variant_class', 'sample', 'is_neoantigen', "is_edited")
+
+variant_priority <- levels(factor(waterfall_df$variant_class))[c(2,3,8,9,12,11,10,13,1,14:16,4,5:7)]
+waterfall_df$translational_effect <- 'non_silent'
+waterfall_df[waterfall_df$variant_class %in% variant_priority[8:16], ]$translational_effect <- 'silent'
+
+editdf <- waterfall_df %>% group_by(sample, is_edited) %>%
+  summarise(count=n(), tmb=count/54)
+
+editdf$sample <-  fct_relevel(editdf$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
+```
+
+
+
+
+```{r }
+top_genes <- vcf_master_epitope %>%
+    filter(ic50 < 500) %>%
+    filter(AD_T > 5) %>%
+    filter(length == 9) %>%
+    group_by(sample) %>%
+    top_n(50, wt=-ic50)
+
+top_genes <- unique(c(levels(as.factor(top_genes$gene)), 'PTEN', 'TP53', 'QKI', 'MAPK2', 'MAPK1', 'MAPK4', 'VEPH1', 'TGFBI',"SLC9A4", 'EGFR', 'CASP5', "MAP7", "MAP3K1", "MAP3K7", "PTPN5", "PTPN11", "BRAF", "PTPRH", "AKT1", "AKT2"))
+top_genes <- top_genes[!(top_genes %in% c('TTC39A', 'FLNC', 'USP48', 'AFM', 'LRRC32', 'GSR', 'CHRD', 'QKI', 'PTEN', 'EGFR', 'TP53', 'DAGLA', 'CENPI', 'C12orf45', 'ATP11A', 'ARHGEF28'))]
+
+tmp <- vcf_master_epitope %>% mutate(ID=paste(sample, gene, ic50, sep='_')) %>% dplyr::select(ID, allele, length, combo, is_edited)
+
+
+ninemer_df <- vcf_master_epitope %>% 
+    filter(gene %in% top_genes) %>% filter(length == 9) %>%
+    group_by(sample, gene) %>% summarise(min_ic50=min(ic50)) %>%
+    mutate(ID=paste(sample, gene, min_ic50, sep='_')) %>% 
+    left_join(tmp, by=c('ID')) %>%
+    dplyr::select(-ID) %>%
+    filter(min_ic50 < 500)
+
+ninemer_df$sample <- fct_relevel(ninemer_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
+rm(tmp, top_genes)
+ninemer_df$gene <- as.factor(ninemer_df$gene)
+
+# order gene factor by number of samples the gene shows up in
+tmp <- data.frame(samples_per_gene=summary(as.factor(ninemer_df$gene)),
+                  gene=names(summary(as.factor(ninemer_df$gene))))
+
+
+ninemer_df <- left_join(ninemer_df, tmp, by=c('gene'))
+ninemer_df$gene <- as.factor(ninemer_df$gene)
+
+ninemer_df$gene <- fct_reorder(ninemer_df$gene, .x=ninemer_df$samples_per_gene)
+
+rm(tmp)
+ninemer_df$is_edited <- as.character(ninemer_df$is_edited)
+ninemer_df$is_edited[ninemer_df$is_edited=='no'] <- 'primary'
+
+# editing_glabels <- ninemer_df %>% group_by(gene) %>% filter(!(gene == "EGFR"& is_edited=="no")) %>% summarise(glabel=getmode(is_edited)) %>% ungroup() %>% dplyr::select(glabel) %>% deframe()
+# levels(editing_glabels) <- c("black", "grey70", "grey40")
+# editing_glabels <- as.character(editing_glabels)
+
+
+ninemer_df$allele <- as.factor(ninemer_df$allele)
+```
+
+
+
+```{r fig.height=20, fig.width=10}
+tmb_barplot <- ggplot(data=tmb_df) + 
+  aes(x=sample,y=tmb, fill=is_neoantigen) + 
+  geom_bar(stat='identity') +
+  labs(x='', y='TMB (Muts/MB)', fill='is neoantigen?') +
+  theme_classic() +
+  theme +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+   scale_fill_manual(values = c('black', "grey40"), labels = c('No', 'Yes'))
+
+# edit_barplot <- ggplot(data=editdf) + 
+#   aes(x=sample,y=tmb, fill=is_edited) + 
+#   geom_bar(stat='identity') +
+#   labs(x='', y='', fill='is edited?') +
+#   theme_classic() +
+#   theme +
+#   theme(axis.title.x=element_blank(),
+#         axis.text.x=element_blank(),
+#         axis.ticks.x=element_blank()) +
+#   scale_fill_manual(values= c("black", "grey70", "grey40"), labels=c('No', 'primary-lost', 'recurrent-gained'))
+
+
+primary_loss <- ggplot(data=ninemer_df[ninemer_df$is_edited == 'primary',]) +
+  aes(x=sample, y=gene, fill=allele, label=min_ic50, drop=FALSE) +
+  geom_tile(color='white', size=1, drop=FALSE) +
+  geom_text(size=7) +
+  labs(x='',y='primary', fill='HLA Allele') +
+  theme_classic() +
+  theme +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())  +
+  scale_fill_brewer(palette = "BrBG", drop=FALSE)
+
+recc_gain <- ggplot(data=ninemer_df[ninemer_df$is_edited == 'recurrent',]) +
+  aes(x=sample, y=gene, fill=allele, label=min_ic50) +
+  geom_tile(color='white', size=1, drop=FALSE) +
+  scale_x_discrete(drop=FALSE) +
+  geom_text(size=7) +
+  labs(x='',y='recurrent', fill='HLA Allele') +
+  theme_classic() + rotate_x_text(angle=45) +
+  theme +
+  scale_fill_brewer(palette = "BrBG", drop=FALSE)
+
+
+immunoprint_ninemer_chart <- ggarrange(tmb_barplot, primary_loss, recc_gain, nrow=3, align = 'v', heights = c(1.2,2.5,6))
+
+# immunoprint_ninemer_chart
+save(ihc_barplot, tmb_barplot, recc_gain, primary_loss, file='fig3_plots.rdata')
+
+
+
+png('~/Google_Drive/LosicLab/manuscripts/GBM heterogeneity/figures/raw_img/3DEFG_immunoprintChart.png', height=24, width=10, units='in', res=300)
+immunoprint_ninemer_chart
+dev.off()
+```
+
+
+## TCGA checkpoint2
+
+
+```{r }
+
+
+libs <- c('tidyverse', 'ggbeeswarm','ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'tcR', 'corrplot', 'edgeR', 'limma', 'ggradar', 'MESS', 'pbmcapply')
+lapply(libs, library, character.only=TRUE)
+#lapply(libs, install.packages)
+rm(libs)
+
+
+# Objective: get a measure (a p-value) of whether the variance between my four samples is 
+# greater than if you were to take the variance four random TCGA samples. To do this,
+# do resamplings of 10% of the total possible combinations of 4 tcga-GBM samples
+# from a pool of 155 samples.
+
+# load in data
+batch.adj.v <- readRDS('data/case.tcga.batch.adj.voom.df.resamp.input.RDS')
+ind <- as.data.frame(t(batch.adj.v[rownames(batch.adj.v) %in% checkpoint.genes, ]))
+ind$submitter_id <- rownames(ind)
+ind$label <- ind$submitter_id
+ind$label[!ind$label %in% c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C') ] <- NA
+
+
+checkpoint.genes <- c('TIM3', 'HAVCR2', 'GMZA','CD208','LAMP3', 'CD28', 'CD3D', 'CD3G',
+ 'CD3E', "PDCD1LG2", 'CD274', 'PDCD1LG1', 'PDL1', "FOXP3", 'CD20', 'MS4A1', 'CD68', 
+ 'CD34', 'CD38', 'CD68', 'LAMP4', 'SCARD1', 'GP110', 'CD4', 'PDCD1', 'CD274')
+
+
+# clean up gene names
+colnames(ind)[1] <- 'PDL1' # 'PDCD1LG1'/CD274 is PDL1
+colnames(ind)[5] <- 'CD3' # use CD3D expression only
+colnames(ind)[10] <- 'TIM3' # HAVCR2
+colnames(ind)[11] <- 'DCLAMP' # LAMP3
+colnames(ind)[12] <- 'PD1' # PDCD1 is PD1
+colnames(ind)[13] <- 'PDL2' # 'PDCD1LG2' is PDL2
+val_cols <- c('PD1', 'PDL1', 'PDL2', 'TIM3', 'CD28', 'CD3', 'CD4', 'FOXP3', 'DCLAMP')
+ind <- ind[, c(val_cols, 'submitter_id', 'label')]
+
+ind$submitter_id <- as.character(ind$submitter_id)
+
+# separate out samples from case study
+ref_df <- ind[1:4,]
+ref_df <- data.frame(var=sapply(ref_df[, val_cols], var),
+                      samp_type=as.character('test'),
+                      val=val_cols)
+
+set.seed(0)
+
+length(combn(ind[- c(1:4),]$submitter_id, 4, simplify=FALSE))
+boot_pool <- ind[- c(1:4),]
+# grab all unique combinations of 4 from the pool of 155 TCGA samples
+# and then only take 10% of that cause there's too many
+combinations <- combn(boot_pool$submitter_id, 4, simplify=FALSE)
+combinations <- base::sample(combinations, length(combinations)*0.1)
+
+# function to take variance of each combination of 4 for each gene/column
+boot_fx <- function(x){
+  # grab the combination of 4
+  x <- boot_pool %>%
+       filter(submitter_id %in% x) %>%
+       dplyr::select(val_cols)
+  # take the variance for each gene 
+  x <- data.frame(var=sapply(x, var),
+                  val=val_cols,
+                  samp_type=as.character('random_boot'))
+  return(x)
+}
+
+# do the resampling; using 3/4 of my cores, and bind the rows.
+boot_pool <- bind_rows(pbmclapply(combinations, boot_fx, mc.cores=3))
+all_boots <- bind_rows(ref_df, boot_pool)
+
+# all_boots <- NULL
+# set.seed(0)
+# for (val in val_cols){
+#     ref_var <- data.frame(var=as.numeric(var(as.numeric(as.character(ref_df[, val])))),
+#                           samp_type=as.character('test'),
+#                           val_col=val)
+
+#     boot_list <- bind_rows(lapply(1:100000, function(i){
+#         samp_i <- sample_n(boot_pool, size=length(ref_samples))
+#         return(data.frame(var=as.numeric(var(as.numeric(as.character(samp_i[, val])))),
+#                           samp_type=as.character('random_boot'),
+#                           val_col=val
+#                           ))
+#         rm(samp_i, i)
+#     }))
+#     all_boots[[val]] <- as.data.frame(rbind(boot_list, ref_var))
+#     print(paste('done with', val))
+#     rm(ref_var, boot_list, val)
+# }
+
+# get a measure of whether the variance between my four samples is greater than
+# if you were to take four random TCGA samples. 
+pvals <- lapply(levels(factor(all_boots$val)), function(i){
+    x <- all_boots %>% filter(val == i) %>% as.data.frame()
+    test_point <- x %>% filter(samp_type == "test") %>% dplyr::select(var) %>% deframe()
+    z <- stats::density(x$var, n=length(x$var))
+    xval <- as.numeric(as.matrix(as.numeric(z$x)))
+    yval <- as.numeric(as.matrix(as.numeric(z$y)))
+
+    # test right-sided
+    rpval <- auc(x=xval, y =yval, from=test_point, to=max(xval) )
+    # test left-sided
+    lpval <- auc(x=xval, y =yval, from=min(xval), to=test_point )
+    # print(paste0(x$val_col[1], ' Right-sided p val = ', rpval, '\n',
+    #       x$val_col[1], ' Left-sided p val = ', lpval))
+    # pick the smallest of the two left-sided and right-sided tests
+    # to get the auc (p-value) for the closest end of the distribution
+    result <- min(c(rpval, lpval))
+    return(result)
+})
+
+names(pvals) <- levels(factor(all_boots$val))
+pvals <- unlist(pvals)
+
+pvaldf <- data.frame(pval=pvals,
+                    gene=names(pvals))
+
+pvaldf
+
+ind2 <- tidyr::gather(ind, gene, cpm, val_cols)
+ind2$gene <- as.factor(ind2$gene)
+ind2$cpm <- as.numeric(ind2$cpm)
+
+
+ind2 <- ind2 %>% inner_join(pvaldf, by=c('gene'))
+
+ind2$sample <- as.character(ind2$label)
+ind2$sample[is.na(ind2$sample)] <- 'TCGA-GBM'
+ind2$sample <- as.factor(ind2$sample)
+
+checkpoint_violins <- ggplot(data=ind2) + 
+            aes(y=cpm, x=gene, color=sample) + 
+            geom_violin(alpha=0.05, aes(color=NULL), fill="#7f7f7f", show.legend = FALSE) + 
+            geom_boxplot(width=0.1, aes(color=NULL, fill=NULL), show.legend = FALSE ) + 
+            geom_beeswarm(data=ind2[ind2$sample =='TCGA-GBM',],cex=0.8,alpha=0.4, size=2, show.legend=FALSE) +#, groupOnX=FALSE) +
+            geom_point(data=ind2[ind2$sample !='TCGA-GBM',], size=6, alpha=0.8) +
+            #geom_beeswarm(data=ind2[ind2$sample !='TCGA-GBM',],cex=0.8, size=4.5)+#, groupOnX=FALSE) +
+            #geom_label_repel(size=5, show.legend=FALSE, force=4, max.iter = 10000000) +
+            theme_classic() + theme + labs(y='Log2(CPM)', x='', color='Sample') + 
+            geom_text(data=pvaldf[pvaldf$pval<0.05,], y=-5,size=6, aes(x=gene,  label=paste('P =',round(pval, digits=4)), color=NULL), show.legend=FALSE ) +
+            scale_color_manual(values = cbpal, aesthetics = 'color')
+
+
+#png(filename = "figures/checkpoint_violins_v3.png", width=25, height = 5, units = "in", res=300)
+saveRDS(checkpoint_violins, file='checkpoint.violins.RDS')
+
+save.image('all_immuneProfiling_workspace.rdata')
+#dev.off()
+```
+
+## immune cell deconvolution
