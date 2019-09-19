@@ -1,7 +1,7 @@
 ---
 title: "PD-1 Responsive Glioblastoma Case Study: Differential Gene Expression & Pathway Analysis"
 author: "Paula Restrepo"
-date: "5/10/2019"
+date: "May 2019"
 output: 
   html_document: 
     df_print: tibble
@@ -13,9 +13,12 @@ output:
 ---
 
 
-```{r include=FALSE}
+Note: Some of the figures in this document use grid.arrange or ggarrange. The heights/widths arguments in grid.arrange() and ggarrange() may have to be tweaked to get the proportions of the panels to look less lopsided.
 
-libs <- c('DESeq2', 'edgeR', 'limma', 'tidyverse', 'combinat', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'ggpubr', 'fgsea', 'ggbeeswarm', 'MESS')
+# Setup
+```{r message=FALSE, warning=FALSE}
+
+libs <- c('DESeq2', 'edgeR', 'limma', 'tidyverse', 'combinat', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'ggpubr', 'fgsea', 'ggbeeswarm', 'MESS', 'pbmcapply')
 lapply(libs, library, character.only=TRUE)
 rm(libs)
 
@@ -32,20 +35,21 @@ theme <- theme(legend.position = 'bottom',
                plot.title=element_text(size=18, face='bold'))
 # load inputs
 
-load("data/001_DEGsAndPathwayAnalysis_inputs.rdata")
-load("data/tcga_exprs_integration.rdata")
+load("../data/001_DEGsAndPathwayAnalysis_inputs.rdata")
+load("../data/tcga_exprs_integration.rdata")
 
 cbpal <-  c("#CC79A7", # purple, primary
             "#E69F00", # yellow, A
             "#56B4E9", # blue, B
             "#009E73", # green, C
             "#7f7f7f") #gray, tcga
+
+source("functions.r")
 ```
 
 
-
+# DEG analysis
 ## Create design matrix
-
 
 ```{r }
 # create  design matrix using all permunations of sample codes.
@@ -71,8 +75,6 @@ rm(d1, d2)
 
 
 ## Generate DEG results using pooled comparisons in DESeq2
-
-
 ```{r message=FALSE, warning=FALSE}
 comparison_list <- NULL # store the comparisons here.
 deg_list <- NULL # store the results of the comparison here.
@@ -96,7 +98,7 @@ for (i in 1:ncol(design)){
 rm(resOrdered, dds, res, ph, sample_code)
 ```
 
-### Clean up sample labels for visualization
+## Clean up sample labels for visualization
 
 ```{r }
 # now take the comparison list into something easier to coerce into a sample v sample string
@@ -135,7 +137,7 @@ top_genes <- do.call(rbind, top_genes)
 ```
 
 
-### Remove mirrored comparisons
+## Remove mirrored comparisons
 
 
 ```{r fig.height=10, fig.width=15}
@@ -163,6 +165,8 @@ volcano_plot_filt <- ggplot(data=deg_df[! deg_df$sample_comparison %in% c('A - v
     facet_wrap(~ sample_comparison, scales='free',nrow=2) +
     theme_classic() + theme +
     labs(title='Volcano Plot: DEGs in Pooled Sample Comparisons')
+
+volcano_plot_filt
 ```
 
 
@@ -187,54 +191,27 @@ deg_ranks <- lapply(deg_list, function(x){
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% mirrored_comparisons]
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% c("A - vs - B, C, P","A, P - vs - B, C")]
 
-hallmark_gsigs <- as.list(qusage::read.gmt('raw_data/databases/msigdb_v6.2_GMTs/h.all.v6.2.symbols.gmt'))
-kegg_gsigs <- as.list(qusage::read.gmt('raw_data/databases/msigdb_v6.2_GMTs/c2.cp.kegg.v6.2.symbols.gmt'))
-biocarta_gsigs <- as.list(qusage::read.gmt('raw_data/databases/msigdb_v6.2_GMTs/c2.cp.biocarta.v6.2.symbols.gmt'))
-reactome_gsigs <- as.list(qusage::read.gmt('raw_data/databases/msigdb_v6.2_GMTs/c2.cp.reactome.v6.2.symbols.gmt'))
+hallmark_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/h.all.v6.2.symbols.gmt'))
+kegg_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.kegg.v6.2.symbols.gmt'))
+biocarta_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.biocarta.v6.2.symbols.gmt'))
+reactome_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.reactome.v6.2.symbols.gmt'))
 ```
-
-
-Set up a function to operate over the lists
-
-```{r }
-# inputs: 
-#   rank_list - named list of genes (deg_ranks above). names should correspond to sample comparison in the DESeq2 test.
-#   sig_list - gene signature being tested
-# output: a dataframe (tibble) containing the fgsea results across all sample comparisons for the tested gene signatures
-gsea_lister <- function(sig_list, rank_list, sig_name){
-  
-  # perform the gsea, include the sample comparison
-  y <- lapply(names(rank_list), function(i){
-    
-    x <- fgsea(pathways=sig_list, stats=rank_list[[i]], nperm=1000) %>%
-    as_tibble() %>%
-    dplyr::select(-leadingEdge, -ES, -nMoreExtreme) %>%
-    mutate(sample_comparison=i, signature_name=sig_name)
-  return(x)
-})
-  
-  y <-  do.call(rbind, y) %>%
-  as_tibble()
-  
-  return(y)
-}
-```
-
-
 
 Generate the enrichment scores & coerce to dataframe
 
 ```{r }
-#oncogene_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = oncogenic_gsigs, sig_name='ONCOGENIC')
-#immunologic_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = immunologic_gsigs, sig_name = 'IMMUNOLOGIC')
-
 # compute gene set enrichments
-hallmark_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = hallmark_gsigs, sig_name='HALLMARK')
-kegg_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = kegg_gsigs, sig_name = 'KEGG')
-reactome_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = reactome_gsigs, sig_name = 'REACTOME')
-biocarta_fgsea <- gsea_lister(rank_list = deg_ranks, sig_list = biocarta_gsigs, sig_name = 'BIOCARTA')
-all_fgsea <- list(hallmark_fgsea, kegg_fgsea, reactome_fgsea, biocarta_fgsea)
+all_fgsea <- list(hallmark_fgsea = gsea_lister(rank_list = deg_ranks, sig_list = hallmark_gsigs, sig_name='HALLMARK'),
+                  kegg_fgsea = gsea_lister(rank_list = deg_ranks, sig_list = kegg_gsigs, sig_name = 'KEGG'),
+                  reactome_fgsea = gsea_lister(rank_list = deg_ranks, sig_list = reactome_gsigs, sig_name = 'REACTOME'),
+                  biocarta_fgsea = gsea_lister(rank_list = deg_ranks, sig_list = biocarta_gsigs, sig_name = 'BIOCARTA')
+)
 
+rm(hallmark_gsigs, kegg_gsigs, reactome_gsigs, biocarta_gsigs)
+```
+
+Select the top pathways, filter irrelevant terms, and order the pathways via hierarchical clustering.
+```{r }
 # select top pathways & order pathways via hclust
 data_list <- lapply(all_fgsea, function(x){
   sig_name <- levels(as.factor(x$signature_name))
@@ -269,14 +246,15 @@ data_list <- lapply(all_fgsea, function(x){
   return(df)
 })
 
+# define terms that are not relevant, and will be hidden in the resulting visualization
 terms <- c('INFLUENZA', 'CELL_CYCLE', 'MITOTIC', 'S_PHASE', 'G1_S_TRANSITION', 'ASTHMA', 'AUTOIMMUNE_THYROID_DISEASE',
 'INFECTION','DISEASE', 'INTESTINAL_IMMUNE_NETWORK_FOR_IGA_PRODUCTION','METABOLISM', 'APICAL_SURFACE','GENESIS',
  '43S', 'SYNAP','NEUROTRANSMITTER', 'GABA', 'GLUTAMATE', 'POTASSIUM_CHANNELS', 'CHANNEL_TRANSPORT', 'CELL_LINEAGE',
  'LUPUS', 'NEURONAL',  'RP_DEPENDENT_COTRANSLATIONAL_PROTEIN_TARGETING_TO_MEMBRANE', 'TRANSLATION', 'proteasome', 'complement', 'homologous_recombination',
-"peptide_chain",'second_messenger', 'REACTIVE_OXYGEN_SPECIES', 'NONSENSE_MEDIATED_DECAY', 'G2M_checkpoint', 'G2_M_CHECKPOINT', 'IMMUNOREGULATORY_INTERACTIONS_BETWEEN',
-'RIBOSOME', 'TIGHT_JUNCTION' ) 
+"peptide_chain",'second_messenger','NONSENSE_MEDIATED_DECAY', 'G2M_checkpoint', 'G2_M_CHECKPOINT', 'IMMUNOREGULATORY_INTERACTIONS_BETWEEN',
+'RIBOSOME', 'TIGHT_JUNCTION') 
 
-
+# apply filters
 data_filt <- lapply(data_list, function(x){
 
   y <- x
@@ -309,7 +287,11 @@ tmp <- df %>% dplyr::select(sample_comparison, pathway, NES) %>%
   return(df)
 
 })
+```
+## Visualize gene set enrichments as a heatmap
 
+Make one plot per gene set database and visualize as a set of stacked heatmaps.
+```{r}
 # set up themes for ggplotting
 theme <- theme(text = element_text(size=16),
                axis.text.y = element_text(size=18, face='bold'),
@@ -339,12 +321,14 @@ plot_list[[4]] <- plot_list[[4]] + theme_classic() + theme + rotate_x_text(angle
 
 names(plot_list) <- c('HALLMARK', 'KEGG', 'REACTOME', 'BIOCARTA')
 pathway_hm <- ggarrange(plotlist=plot_list, nrow=length(all_fgsea), align='v',  common.legend=TRUE, legend='right', heights=c(1.2,0.6,0.5,1.6))
+
+pathway_hm
 ```
 
 
-## Integrate TCGA expression in the form of a PCA
+# Integrate TCGA expression information
 
-
+## PCA
 ```{r fig.height=10, fig.width=10, warning=FALSE}
 ind$label[1:4] <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
 ind$sample <- ind$label
@@ -360,17 +344,119 @@ tcga_pca <- ggplot(data = ind) +
   theme_classic() + theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
   theme + scale_color_manual(values = cbpal)
 
-checkpoint_violins <- readRDS('checkpoint.violins.RDS') + theme
-
-
-tcga_integration <- ggarrange(tcga_pca, checkpoint_violins, nrow=2, heights=c(2,0.7), align='v', common.legend=TRUE, legend='right')
+tcga_pca
 ```
 
-## save resulting plots as rdata files
+## With distributions of specific checkpoint and immune genes
 
-```{r }
-saveRDS(tcga_pca, file='tcga_pca_plot.RDS')
-saveRDS(pathway_hm, file='gsea_pathway_heatmap.RDS')
-saveRDS(volcano_plot_filt, file='volcano_plot.RDS')
+Objective: get a measure (a p-value) of whether the variance between my four samples is greater than if you were to take the variance four random TCGA samples. To do this, do resamplings of 10% of the total possible combinations of 4 tcga-GBM samples from a pool of 155 samples.
+```{r}
+ind <- as.data.frame(t(batch.adj.v[rownames(batch.adj.v) %in% checkpoint.genes, ]))
+ind$submitter_id <- rownames(ind)
+ind$label <- ind$submitter_id
+ind$label[!ind$label %in% c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C') ] <- NA
+
+
+checkpoint.genes <- c('TIM3', 'HAVCR2', 'GMZA','CD208','LAMP3', 'CD28', 'CD3D', 'CD3G',
+ 'CD3E', "PDCD1LG2", 'CD274', 'PDCD1LG1', 'PDL1', "FOXP3", 'CD20', 'MS4A1', 'CD68', 
+ 'CD34', 'CD38', 'CD68', 'LAMP4', 'SCARD1', 'GP110', 'CD4', 'PDCD1', 'CD274')
+
+
+# clean up gene names
+colnames(ind)[1] <- 'PDL1' # 'PDCD1LG1'/CD274 is PDL1
+colnames(ind)[5] <- 'CD3' # use CD3D expression only
+colnames(ind)[10] <- 'TIM3' # HAVCR2
+colnames(ind)[11] <- 'DCLAMP' # LAMP3
+colnames(ind)[12] <- 'PD1' # PDCD1 is PD1
+colnames(ind)[13] <- 'PDL2' # 'PDCD1LG2' is PDL2
+val_cols <- c('PD1', 'PDL1', 'PDL2', 'TIM3', 'CD28', 'CD3', 'CD4', 'FOXP3', 'DCLAMP')
+ind <- ind[, c(val_cols, 'submitter_id', 'label')]
+
+ind$submitter_id <- as.character(ind$submitter_id)
+
+# separate out samples from case study
+ref_df <- ind[1:4,]
+ref_df <- data.frame(var=sapply(ref_df[, val_cols], var),
+                      samp_type=as.character('test'),
+                      val=val_cols)
+
+set.seed(0)
+
+length(combn(ind[- c(1:4),]$submitter_id, 4, simplify=FALSE))
+boot_pool <- ind[- c(1:4),]
+# grab all unique combinations of 4 from the pool of 155 TCGA samples
+# and then only take 10% of that cause there's too many
+combinations <- combn(boot_pool$submitter_id, 4, simplify=FALSE)
+combinations <- base::sample(combinations, length(combinations)*0.1)
+
+# function to take variance of each combination of 4 for each gene/column
+boot_fx <- function(x){
+  # grab the combination of 4
+  x <- boot_pool %>%
+       filter(submitter_id %in% x) %>%
+       dplyr::select(val_cols)
+  # take the variance for each gene 
+  x <- data.frame(var=sapply(x, var),
+                  val=val_cols,
+                  samp_type=as.character('random_boot'))
+  return(x)
+}
+
+# do the resampling; using 3 cores (but the more the merrier!), and then bind the rows.
+boot_pool <- bind_rows(pbmclapply(combinations, boot_fx, mc.cores=3))
+all_boots <- bind_rows(ref_df, boot_pool)
+
+# get a measure of whether the variance between my four samples is greater than
+# if you were to take four random TCGA samples. 
+pvals <- lapply(levels(factor(all_boots$val)), function(i){
+    x <- all_boots %>% filter(val == i) %>% as.data.frame()
+    test_point <- x %>% filter(samp_type == "test") %>% dplyr::select(var) %>% deframe()
+    z <- stats::density(x$var, n=length(x$var))
+    xval <- as.numeric(as.matrix(as.numeric(z$x)))
+    yval <- as.numeric(as.matrix(as.numeric(z$y)))
+
+    # test right-sided
+    rpval <- auc(x=xval, y =yval, from=test_point, to=max(xval) )
+    # test left-sided
+    lpval <- auc(x=xval, y =yval, from=min(xval), to=test_point )
+    # pick the smallest of the two left-sided and right-sided tests
+    # to get the auc (p-value) for the closest end of the distribution
+    result <- min(c(rpval, lpval))
+    return(result)
+})
+
+names(pvals) <- levels(factor(all_boots$val))
+pvals <- unlist(pvals)
+
+pvaldf <- data.frame(pval=pvals,
+                    gene=names(pvals))
+
+pvaldf
 ```
 
+
+## plot the checkpoint violins
+```{r}
+ind2 <- tidyr::gather(ind, gene, cpm, val_cols)
+ind2$gene <- as.factor(ind2$gene)
+ind2$cpm <- as.numeric(ind2$cpm)
+
+
+ind2 <- ind2 %>% inner_join(pvaldf, by=c('gene'))
+
+ind2$sample <- as.character(ind2$label)
+ind2$sample[is.na(ind2$sample)] <- 'TCGA-GBM'
+ind2$sample <- as.factor(ind2$sample)
+
+checkpoint_violins <- ggplot(data=ind2) + 
+            aes(y=cpm, x=gene, color=sample) + 
+            geom_violin(alpha=0.05, aes(color=NULL), fill="#7f7f7f", show.legend = FALSE) + 
+            geom_boxplot(width=0.1, aes(color=NULL, fill=NULL), show.legend = FALSE ) + 
+            geom_beeswarm(data=ind2[ind2$sample =='TCGA-GBM',],cex=0.8,alpha=0.4, size=2, show.legend=FALSE) +
+            geom_point(data=ind2[ind2$sample !='TCGA-GBM',], size=6, alpha=0.8) +
+            theme_classic() + theme + labs(y='Log2(CPM)', x='', color='Sample') + 
+            geom_text(data=pvaldf[pvaldf$pval<0.05,], y=-5,size=6, aes(x=gene,  label=paste('P =',round(pval, digits=4)), color=NULL), show.legend=FALSE ) +
+            scale_color_manual(values = cbpal, aesthetics = 'color')
+
+checkpoint_violins
+```

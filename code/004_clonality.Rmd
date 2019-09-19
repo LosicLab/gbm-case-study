@@ -1,8 +1,15 @@
 ---
-title: "clonality"
+title: "PD-1 Responsive Glioblastoma Case Study: Tumor Clonality Analysis"
 author: "Paula Restrepo"
-date: "5/14/2019"
-output: html_document
+date: "May 2019"
+output: 
+  html_document: 
+    df_print: tibble
+    highlight: kate
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: true
 ---
 
 ```{r setup, include=FALSE}

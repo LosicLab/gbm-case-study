@@ -1,5 +1,5 @@
 ---
-title: "PD-1 Responsive Glioblastoma Case Study: Mutation & Neoantigen Analysis"
+title: "PD-1 Responsive Glioblastoma Case Study: Mutation & CNV analysis"
 author: "Paula Restrepo"
 date: "May 2019"
 output: 
@@ -10,9 +10,11 @@ output:
     theme: spacelab
     toc: yes
     toc_float: true
+---
 
+# Set up
 
-```{r setup, include=FALSE}
+```{r setup}
 set.seed(0)
 
 libs <- c('tidyverse', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'GenomicRanges')
@@ -31,70 +33,62 @@ theme <- theme(text = element_text(size=24),
                legend.justification='left')
 
 # load inputs
-load("data/somatic_mutations.rdata")
-load("data/cnv.segments.rdata")
-load("data/cosmic.cgc.rdata")
+somatic_mutations <- read_tsv("../data/somatic_mutations_table.tsv.gz")
+cns_table <- read_tsv("../data/cns_table.tsv.gz")
+load("../data/cosmic.cgc.rdata")
 
-# function box
-extract.vaf <- function(var.table, AD.col='gt_AD') {
-    var.table <- tidyr::separate(var.table, AD.col, c("AD_N", "AD_T"), sep=",")
-    var.table[, c("AD_N", "AD_T")] <- lapply(var.table[, c("AD_N", "AD_T")], as.numeric)
-    var.table$VAF_AD <- 100 * ( var.table$AD_T / (var.table$AD_N + var.table$AD_T) )
-    return(var.table)
-}
-
-
-getmode <- function(v) {
-   uniqv <- unique(v)
-   uniqv[which.max(tabulate(match(v, uniqv)))]
-}
+source('functions.r')
 ```
 
-
+# Create an Oncoprint chart using ggplot
 ## set up mutation chart
 
-
-```{r }
-rownames(somatic_mutations) <- 1:nrow(somatic_mutations)
-somatic_mutations <- extract.vaf(somatic_mutations)
-```
-```{r }
-
-gene_list1 <- c("MAPK1", 'MAPK2','MAPK4', "MAP3K1", "MAPKAPK5", "MAP7", "MAP3K7",
+Select genes to visualize in heatmap.
+```{r}
+# manually selected set of genes to look for
+gene_list <- c("MAPK1", 'MAPK2','MAPK4', "MAP3K1", "MAPKAPK5", "MAP7", "MAP3K7",
                'PTEN', 'EGFR', 'TP53','BRAF', 'PTPN11',"PTPN3","PTPN4","PTPN5", 'PTPRH',
                'MTOR', 'RHOA', 'AKT1', "AKT2", "AKT3", "PIK3CA", "PIK3CB","IDH1",
                "USH2A", "MLL3", "BRCA1", "POLE1", "NF1", "ATRX", "CIC", "CDK11A" )
 
-waterfall_df <- somatic_mutations %>% as_tibble() %>%
-  mutate(variant_class=ExonicFunc_refGene)
+top_genes <- somatic_mutations %>% 
+  arrange(desc(as.numeric(gt_AF))) %>%
+  group_by(sample) %>% top_n(n=25, wt=gt_AF)
 
-top_genes <- somatic_mutations %>% arrange(desc(as.numeric(gt_AF))) %>% group_by(sample) %>% top_n(n=25, wt=gt_AF)
+gene_list <- c(gene_list, 
+               top_genes$Gene_refGene,
+               levels(factor(cosmic.v89.cgc$`Gene Symbol`)))
 
-gene_list <- c(gene_list1, top_genes$Gene_refGene, levels(factor(cosmic.v89.cgc$`Gene Symbol`)))
-rm(top_genes)
+mut_heatmap_df <- somatic_mutations %>%
+  filter(Gene_refGene %in% gene_list) %>%
+  mutate(sample=fct_relevel(sample, c('Primary', "Recurrent_A",
+                                      'Recurrent_B', 'Recurrent_C')),
+         gene=Gene_refGene)
+```
 
-waterfall_df[waterfall_df$variant_class == '.',]$variant_class <- waterfall_df[waterfall_df$variant_class == '.',]$Func_refGene
+Prepare tumor mutation burden df for visualization
+We use the formula of TMB = Number of mutations / Megabases of DNA covered by the sequencing assay; in the case of the Agilent SureSelect library it's about 54 MB.
+```{r}
+tmb_df <- somatic_mutations %>%
+  group_by(sample, translational_effect) %>%
+  summarise(count = n(),tmb=count/54) %>%
+  ungroup() %>%
+  mutate(sample = fct_relevel(sample, c('Primary', "Recurrent_A", 
+                                        'Recurrent_B', 'Recurrent_C')) )
 
-waterfall_df <- waterfall_df %>% dplyr::select(CHROM, POS, REF, ALT, Gene_refGene, variant_class, sample)
-colnames(waterfall_df) <- c('chr', 'pos', 'ref', 'alt', 'gene', 'variant_class', 'sample')
-variant_priority <- levels(factor(waterfall_df$variant_class))[c(2,3,8,9,12,11,10,13,1,14:16,4,5:7)]
-waterfall_df$translational_effect <- 'non_silent'
-waterfall_df[waterfall_df$variant_class %in% variant_priority[8:16], ]$translational_effect <- 'silent'
+tmb2 <- somatic_mutations %>% group_by(sample) %>%
+  summarise(count=n(),tmb=count/54) %>%
+  ungroup() %>%
+  mutate(sample =  fct_relevel(sample, c('Primary', "Recurrent_A",
+                                         'Recurrent_B', 'Recurrent_C')) )
 
-tmb_df <- waterfall_df %>% group_by(sample, translational_effect) %>%
-  summarise(count=n(),tmb=count/54)
-tmb_df$sample <-  fct_relevel(tmb_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
-
-
-tmb2 <- waterfall_df %>% group_by(sample) %>%
-  summarise(count=n(),tmb=count/54)
-tmb2$sample <-  fct_relevel(tmb2$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
-
-mut_heatmap_df <- waterfall_df[waterfall_df$gene %in% gene_list1,]
-mut_heatmap_df$sample <-  fct_relevel(mut_heatmap_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
+tmb_df
+tmb2
 ```
 
 ## set up cnv chart
+
+Select genes covered by CNVs that we wish to visualize. Define bins of CNV severity. We use a +/- 0.25 log2 threshold under which we would consider a call to be neutral or not cnv-altered.
 
 ```{r }
 cnv_heatmap_df <- cns_table %>%
@@ -107,11 +101,15 @@ cnv_heatmap_df <- lapply(gene_list, function(x){
   }
   return(y)
 })
+
 cnv_heatmap_df <- do.call(rbind, cnv_heatmap_df)
 cnv_heatmap_df <- unique(cnv_heatmap_df)
 cnv_heatmap_df$query_gene <- as.character(cnv_heatmap_df$query_gene)
 
-cnv_heatmap_df <- cnv_heatmap_df %>% group_by(query_gene, sample) %>% summarise(average_cnv=mean(log2))
+cnv_heatmap_df <- cnv_heatmap_df %>% 
+  group_by(query_gene, sample) %>% 
+  summarise(average_cnv=mean(log2))
+
 levels(cnv_heatmap_df$sample) <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
 
 cnv_list <- c(gene_list1, 'SND1', "MIER2", "VAV1")
@@ -123,10 +121,11 @@ levels(cnv_heatmap_df$cnv_type) <- c('deletion', 'mild deletion', 'neutral', 'mi
 cnv_heatmap_df$sample <- fct_relevel(cnv_heatmap_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
 
 cnv_heatmap_df <- cnv_heatmap_df %>% filter(cnv_type != 'neutral')
+
+cnv_heatmap_df
 ```
 
-Calculate the genomic instability index for each sample using 54 Mb with a 0.5-fold change threshold
-
+Calculate the genomic instability index (% genome altered) for each sample using the 54 Mb coverage and 0.5-fold change threshold for neutrality
 ```{r }
 case_cnv_granges <- lapply(cns_list, function(x){makeGRangesFromDataFrame(x[abs(x$log2) > 0.5 ,], keep.extra.columns = TRUE, seqnames.field = 'chromosome', start.field = 'start', end.field = 'end')})
 case_cnv_granges <- GRangesList(case_cnv_granges)
@@ -155,8 +154,6 @@ pheno_summary$val <- round(pheno_summary$val, digits=1)
 ```
 
 ## plot the mutation summary
-
-
 ```{r fig.height=16, fig.width=10}
 mut_burden_barplot <- ggplot(data=tmb_df) + 
   aes(x=sample,y=tmb, fill=translational_effect) + 
@@ -206,9 +203,9 @@ oncoprint_chart <- ggarrange(mut_burden_barplot ,phenotype,mut_heatmap,cnv_heatm
 oncoprint_chart
 ```
 
-Find the overlap of mutations
+## Find the overlap of mutations
 
-
+Calculate the overlap
 ```{r }
 count <- function(x,y){ f<- table(rbind(x,y)); sum(f[f>1])/sum(f) }
 
@@ -234,19 +231,27 @@ rownames(mutation_overlap) <-levels(vcf_filtered_df_OL$sample)
 colnames(mutation_overlap) <- levels(vcf_filtered_df_OL$sample)
 mutation_overlap2 <- melt( mutation_overlap)
 colnames(mutation_overlap2) <- c('sample1', 'sample2', 'overlap')
+
+summary(mutation_overlap2)
 ```
 
-
+plot the overlap
 
 ```{r }
 # moverlap plot
 
-ggplot(data=mutation_overlap2) + aes(x = sample1, y = sample2) +
-    geom_tile(color='black', size=0.5, aes(fill = round(overlap * 100, 2))) +
-    geom_label(aes(label = round(overlap * 100, 2)), size=9) +
-    labs(x='', y='') +
-    scale_fill_gradientn(colours = hm.palette(100), name='% Overlap', limits= c(0,100)) +
-    theme_minimal() + hm.theme +
-    guides(fill = guide_colorbar(barwidth = 20))
+moverlap <- ggplot(data=mutation_overlap2) + aes(x = sample1, y = sample2) +
+            geom_tile(color='black', size=0.5, aes(fill = round(overlap * 100, 2))) +
+            geom_label(aes(label = round(overlap * 100, 2)), size=9) +
+            labs(x='', y='') +
+            scale_fill_gradientn(colours = hm.palette(100), name='% Overlap', limits= c(0,100)) +
+            theme_minimal() + hm.theme +
+            guides(fill = guide_colorbar(barwidth = 20))
+
+moverlap
 ```
+
+
+# Clonality Analysis
+
 
