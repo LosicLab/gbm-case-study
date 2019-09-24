@@ -13,13 +13,15 @@ output:
 ---
 
 # Set up
-
-```{r setup}
-set.seed(0)
-
-libs <- c('tidyverse', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'GenomicRanges')
+```{r include=FALSE}
+libs <- c('tidyverse', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'GenomicRanges', 'sciClone', 'clonevol', 'reshape2')
 lapply(libs, library, character.only=TRUE)
 rm(libs)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+set.seed(0)
 
 # set up themes for ggplotting
 theme <- theme(text = element_text(size=24),
@@ -46,7 +48,7 @@ source('functions.r')
 Select genes to visualize in heatmap.
 ```{r}
 # manually selected set of genes to look for
-gene_list <- c("MAPK1", 'MAPK2','MAPK4', "MAP3K1", "MAPKAPK5", "MAP7", "MAP3K7",
+gene_list1 <- c("MAPK1", 'MAPK2','MAPK4', "MAP3K1", "MAPKAPK5", "MAP7", "MAP3K7",
                'PTEN', 'EGFR', 'TP53','BRAF', 'PTPN11',"PTPN3","PTPN4","PTPN5", 'PTPRH',
                'MTOR', 'RHOA', 'AKT1', "AKT2", "AKT3", "PIK3CA", "PIK3CB","IDH1",
                "USH2A", "MLL3", "BRCA1", "POLE1", "NF1", "ATRX", "CIC", "CDK11A" )
@@ -55,12 +57,12 @@ top_genes <- somatic_mutations %>%
   arrange(desc(as.numeric(gt_AF))) %>%
   group_by(sample) %>% top_n(n=25, wt=gt_AF)
 
-gene_list <- c(gene_list, 
+gene_list <- c(gene_list1, 
                top_genes$Gene_refGene,
                levels(factor(cosmic.v89.cgc$`Gene Symbol`)))
 
 mut_heatmap_df <- somatic_mutations %>%
-  filter(Gene_refGene %in% gene_list) %>%
+  filter(Gene_refGene %in% gene_list1) %>%
   mutate(sample=fct_relevel(sample, c('Primary', "Recurrent_A",
                                       'Recurrent_B', 'Recurrent_C')),
          gene=Gene_refGene)
@@ -127,7 +129,17 @@ cnv_heatmap_df
 
 Calculate the genomic instability index (% genome altered) for each sample using the 54 Mb coverage and 0.5-fold change threshold for neutrality
 ```{r }
-case_cnv_granges <- lapply(cns_list, function(x){makeGRangesFromDataFrame(x[abs(x$log2) > 0.5 ,], keep.extra.columns = TRUE, seqnames.field = 'chromosome', start.field = 'start', end.field = 'end')})
+case_cnv_granges <- lapply(levels(factor(cns_table$sample)), function(x){
+  x <- cns_table %>% filter(sample %in% x)
+  
+  x <- makeGRangesFromDataFrame(x[abs(x$log2) > 0.5 ,], keep.extra.columns = TRUE,
+                                seqnames.field = 'chromosome', start.field = 'start', end.field = 'end')
+  
+  return(x)
+  
+  })
+
+
 case_cnv_granges <- GRangesList(case_cnv_granges)
 case_total_cnv_lengths <- sum(width(reduce(case_cnv_granges, ignore.strand=TRUE)))
 cnv_lenths_mb <- case_total_cnv_lengths / (1e7)
@@ -151,10 +163,11 @@ pheno_summary <- pheno_summary %>% tidyr::gather(var, val, c('tumor_purity', 'in
 pheno_summary$var <- as.factor(pheno_summary$var)
 levels(pheno_summary$var) <- c('Genomic Instability Index', 'Tumor Purity')
 pheno_summary$val <- round(pheno_summary$val, digits=1)
+
 ```
 
 ## plot the mutation summary
-```{r fig.height=16, fig.width=10}
+```{r fig.height=20, fig.width=15, message=FALSE, warning=FALSE}
 mut_burden_barplot <- ggplot(data=tmb_df) + 
   aes(x=sample,y=tmb, fill=translational_effect) + 
   geom_bar(stat='identity') +
@@ -173,7 +186,7 @@ mut_heatmap <- ggplot(data=mut_heatmap_df) +
   labs(x='',y='SNV', fill='SNV Type') +
   theme_classic() +
   theme +
-  scale_fill_manual(values = rev(brewer.pal(7, 'Spectral')) ) +
+  scale_fill_brewer(palette="Spectral") +
   theme(axis.title.x=element_blank(),
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank())
@@ -206,7 +219,7 @@ oncoprint_chart
 ## Find the overlap of mutations
 
 Calculate the overlap
-```{r }
+```{r message=FALSE, warning=FALSE}
 count <- function(x,y){ f<- table(rbind(x,y)); sum(f[f>1])/sum(f) }
 
 hm.palette <- colorRampPalette(rev(brewer.pal(100, 'YlGnBu')), space='Lab')
@@ -221,14 +234,14 @@ hm.theme <-  theme(legend.position='bottom',
 vcf_filtered_df_OL <- somatic_mutations
 mutation_overlap <- NULL
 
-for (sample in levels(vcf_filtered_df_OL$sample)){
+for (sample in levels(as.factor(vcf_filtered_df_OL$sample))){
     idx <- vcf_filtered_df_OL$sample == sample
     mutation_overlap[[sample]] <- unique(as.matrix(factor(vcf_filtered_df_OL[idx,]$variant)))
 }
 
 mutation_overlap <- sapply(mutation_overlap, function(x) sapply(mutation_overlap, function(y) count(x,y)))
-rownames(mutation_overlap) <-levels(vcf_filtered_df_OL$sample)
-colnames(mutation_overlap) <- levels(vcf_filtered_df_OL$sample)
+rownames(mutation_overlap) <- levels(as.factor(vcf_filtered_df_OL$sample))
+colnames(mutation_overlap) <- levels(as.factor(vcf_filtered_df_OL$sample))
 mutation_overlap2 <- melt( mutation_overlap)
 colnames(mutation_overlap2) <- c('sample1', 'sample2', 'overlap')
 
@@ -237,7 +250,7 @@ summary(mutation_overlap2)
 
 plot the overlap
 
-```{r }
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
 # moverlap plot
 
 moverlap <- ggplot(data=mutation_overlap2) + aes(x = sample1, y = sample2) +
@@ -254,4 +267,105 @@ moverlap
 
 # Clonality Analysis
 
+```{r}
+load('../data/sciclone_vafs_and_cnv_inputs.rdata')
 
+vaf_table <- do.call(rbind, vaf_list)
+
+ggplot(data=vaf_table) + 
+  aes(x=as.factor(chromNum), y=VAF, fill=as.factor(chromNum)) + 
+  geom_violin(show.legend=FALSE) + 
+  geom_hline(yintercept = 50, linetype='dashed', color='gray') +
+  theme_classic()
+
+vaf_list_clean <- lapply(vaf_list, function(x){
+    x[! (as.factor(x$chromNum) %in% c(1,7,9,12,14)),]})
+
+rm(vaf_table)
+```
+
+Prepare sample grouping and annotation.
+```{r}
+names <- c("Recurrent_A", 'Recurrent_B', 'Recurrent_C', 'Primary')
+# prepare sample grouping
+sample.groups <- as.factor(c('R', 'R', 'R', 'P'))
+names(sample.groups) <- names
+
+# prepare time-point information for plots
+# first recurrence was after two (28-day) cycles of TMZ.
+time.points <- c(56,56,56,0)
+names(time.points) <- names
+
+clone.colors <- c('#999793', '#8d4891', '#f8e356', '#fe9536', '#d7352e')
+
+```
+
+Run Sciclone
+```{r message=FALSE, warning=FALSE}
+set.seed(0)
+sc <- sciClone(vafs=vaf_list_clean,
+               copyNumberCalls = cnv_list,
+               cnCallsAreLog2 = TRUE,
+               sampleNames = names,
+               minimumDepth = 300,
+               useSexChrs = FALSE,
+               verbose = FALSE)
+
+sc_vafs <- data.frame(sc@vafs.merged)
+```
+
+Remove NA clusters and negative clusters. Preview the results.
+```{r}
+sc_vafs <- sc_vafs[!is.na(sc_vafs$cluster) & sc_vafs$cluster > 0,]
+
+sc_vafs
+```
+
+```{r fig.height=8, fig.width=10}
+sc.plot2d(sc, singlePage = TRUE, ylim=40, xlim=40)
+```
+
+```{r fig.height=8, fig.width=10}
+sc_long <- sc_vafs %>%
+             tidyr::gather(sample, VAF, paste0(names, '.vaf')) %>%
+             mutate(sample=gsub('.vaf', '', sample, fixed=TRUE))
+
+sc_box <- ggplot(data =  sc_long) + aes(x = as.factor(cluster), y = VAF, color=as.factor(cluster)) +
+             geom_boxplot(width=0.5, show.legend=FALSE) + geom_jitter(alpha=0.7) + facet_wrap(~sample, ncol=1) +
+             theme_classic() + scale_color_manual(values=clone.colors)
+
+sc_box
+```
+
+```{r}
+set.seed(0)
+y = infer.clonal.models(variants = sc_vafs,
+                        vaf.col.names = paste0(names, '.vaf'),
+                        cluster.col.name =  "cluster",
+                        cancer.initiation.model = 'polyclonal', 
+                        subclonal.test = 'bootstrap', 
+                        subclonal.test.model = 'non-parametric',
+                        num.boots = 8000,
+                        sample.names = names,
+                        cluster.center = 'median',
+                        min.cluster.vaf = 0.05,
+                        sum.p = 0.05,
+                        alpha = 0.05,
+                        random.seed = 0,
+                        seeding.aware.tree.pruning = TRUE)
+
+clonal_models = convert.consensus.tree.clone.to.branch(y, branch.scale = 'sqrt')
+```
+
+```{r fig.height=7, fig.width=7}
+plot.tree.clone.as.branch(clonal_models$matched$merged.trees[[1]], branch.width =0.5,
+                          node.size = 1.5, node.label.size = 0.5,
+                          tree.rotation=180)
+```
+
+
+
+# RSession Info
+```{r}
+sessionInfo()
+```

@@ -1,6 +1,7 @@
 ---
-title: "Immune Cells & Neoantigen Profiling"
+title: "PD-1 Responsive Glioblastoma Case Study: Immune Cells & Neoantigen Profiling"
 author: "Paula Restrepo"
+date: "May 2019"
 output:
   html_document:
     fig_height: 10
@@ -14,11 +15,15 @@ output:
 ---
 
 # Set up
-```{r setup}
-libs <- c('tidyverse','ggrepel','RColorBrewer', 'ggpubr', 'tcR')
-lapply(libs, library, character.only=TRUE)
-rm(libs)
 
+```{r include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+libs <- c('tidyverse','ggrepel','RColorBrewer', 'ggpubr', 'tcR')
+lapply(libs, library, character.only=TRUE, verbose=FALSE, quietly=TRUE)
+rm(libs)
+```
+
+```{r}
 cbpal <-  c("#CC79A7", # purple, primary
             "#E69F00", # yellow, A
             "#56B4E9", # blue, B
@@ -40,7 +45,7 @@ source('functions.r')
 
 
 # Multiplex IHC quantification (visualization)
-```{r message=FALSE, warning=FALSE}
+```{r fig.height=10, fig.width=7, message=FALSE, warning=FALSE}
 ihc_results2 <- read_csv('../data/ihc.results.csv.gz') %>%
   filter(variable=='percentage') %>%
   dplyr::select(sample, cell_type, value)
@@ -78,7 +83,7 @@ ihc_barplot2
 
 ## How much editing is there in mutations that have a predicted neoantigen?
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 somatic_mutations <- read_tsv("../data/somatic_mutations_table.tsv.gz")
 
 somatic_mutations %>% 
@@ -91,7 +96,7 @@ somatic_mutations %>%
 
 Select epitopes to plot. use ninemers because they have the best training data in NetMHC
 
-```{r }
+```{r message=FALSE, warning=FALSE}
 vcf_master_epitope <- read_tsv('../data/topiary_predicted_ninemers.tsv.gz')
 
 
@@ -130,7 +135,7 @@ top_epitopes <- top_epitopes[top_epitopes$AD_T > 10, ]
 ```
 
 Plot a scatter of putatively immunogenic (ninemer) neoantigens
-```{r fig.height=7, fig.width=10, message=FALSE, warning=FALSE}
+```{r fig.height=10, fig.width=12, message=FALSE, warning=FALSE}
 neoantigen_scatter <- ggplot(plotdf) + 
   aes(x=log(ic50), y=VAF_AD, color = allele, size=AD_T) +
   geom_jitter(alpha=0.7) + 
@@ -223,7 +228,7 @@ ninemer_df$is_edited <- as.character(ninemer_df$is_edited)
 ninemer_df$allele <- as.factor(ninemer_df$allele)
 ```
 
-```{r fig.height=12, fig.width=5}
+```{r fig.height=18, fig.width=10}
 tmb_barplot <- ggplot(data=tmb_df) + 
   aes(x=sample,y=tmb, fill=is_neoantigen) + 
   geom_bar(stat='identity') +
@@ -266,5 +271,82 @@ immunoprint_ninemer_chart
 ```
 
 # immune cell deconvolution with xCELL
+
+Read in xCELL results.
+```{r message=FALSE, warning=FALSE}
+xcell_results <- read_tsv('../data/xCell_filtered_cpm_for_xcell_xCell_0704072519.results.txt.gz', 
+                          skip=1, col_names=c("cell_type","Recurrent_A", "Recurrent_B",
+                                              "Recurrent_C", "Primary"))  %>%
+                 tidyr::gather(sample, percent, c("Recurrent_A", "Recurrent_B", 
+                                                  "Recurrent_C", "Primary"), convert=TRUE, factor_key=TRUE) %>%
+                 mutate(deconv_method='xCell',
+                        cell_type = factor(cell_type, levels = rownames(
+                          read.table('../data/xCell_filtered_cpm_for_xcell_xCell_0704072519.results.txt.gz',
+                                     sep='\t',stringsAsFactors=FALSE,row.names=1))), 
+                        sample=as.factor(sample))
+
+xcell_results
+```
+Show all xcell results, with the exception of stromal and other non-immune cell-types.
+
+```{r}
+
+# filter xcell results to show a subset of celltypes
+cell_types <- c(# xCELL's aggregate scores
+                "MicroenvironmentScore", "StromaScore", "ImmuneScore",
+                # T-lymphocytes
+                "Th1 cells","Th2 cells","Tregs", "CD4+ memory T-cells",
+                "CD4+ naive T-cells","CD4+ T-cells","CD4+ Tcm","CD4+ Tem",
+                "CD8+ naive T-cells","CD8+ T-cells","CD8+ Tcm","CD8+ Tem",
+                # B-lymphocytes
+                "pro B-cells","Memory B-cells","naive B-cells",
+                "Class-switched memory B-cells","B-cells",
+                # innate popupations
+                "Macrophages","Macrophages M1","Macrophages M2",
+                "Monocytes","Neutrophils","Mast cells","Basophils",
+                "NK cells","DC", "pDC")
+
+xcell_results <- xcell_results %>%
+                      filter(cell_type %in% cell_types) %>%
+                      mutate(cell_type = factor(as.character(cell_type), levels=rev(cell_types))) %>%
+                      # remove celltypes with estimated negative percentages
+                      filter(percent >= 0)
+
+xcell_showall <- ggplot(data=xcell_results) + 
+              aes(x=cell_type, y=percent*100, color=sample, group=sample) +
+              geom_point(alpha=0.75, size=8) + geom_line(alpha=0.6) +
+              theme_classic() + theme + scale_color_manual(values=cbpal) +
+              rotate_x_text(angle=45) + scale_x_discrete(drop=FALSE) +
+              labs(y='percent (%)', x='', title='xCELL quantification') + coord_flip()
+
+xcell_showall
+```
+Filter xCELL results to showcase a subset of celltypes.
+```{r}
+xcell_filt <- xcell_results %>%
+              filter(cell_type %in% 
+                       c("naive B-cells","Memory B-cells","Tregs","Th1 cells",
+                         "Th2 cells","CD8+ T-cells","CD4+ naive T-cells","CD4+ memory T-cells",
+                         "Macrophages M1","Macrophages M2","Monocytes")) %>%
+              mutate(cell_type=factor(as.character(cell_type), 
+                                      levels = c("naive B-cells","Memory B-cells", "Tregs","Th1 cells",
+                                                 "Th2 cells", "CD8+ T-cells","CD4+ naive T-cells",
+                                                 "CD4+ memory T-cells", "Macrophages M1",
+                                                 "Macrophages M2","Monocytes")))
+
+xcell_showfilt <- ggplot(data=xcell_filt) + 
+              aes(x=cell_type, y=percent*100, color=sample, group=sample) +
+              geom_point(alpha=0.75, size=8) + geom_line(alpha=0.6) +
+              theme_classic() + theme + scale_color_manual(values=cbpal) +
+              rotate_x_text(angle=45) + scale_x_discrete(drop=FALSE) +
+              labs(y='percent (%)', x='', title='xCELL quantification') + coord_flip()
+
+xcell_showfilt
+```
+
+# RSession Info
+```{r}
+sessionInfo()
+```
 
 

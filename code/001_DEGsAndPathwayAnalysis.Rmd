@@ -16,7 +16,7 @@ output:
 Note: Some of the figures in this document use grid.arrange or ggarrange. The heights/widths arguments in grid.arrange() and ggarrange() may have to be tweaked to get the proportions of the panels to look less lopsided.
 
 # Setup
-```{r message=FALSE, warning=FALSE}
+```{r include=FALSE}
 
 libs <- c('DESeq2', 'edgeR', 'limma', 'tidyverse', 'combinat', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'ggpubr', 'fgsea', 'ggbeeswarm', 'MESS', 'pbmcapply')
 lapply(libs, library, character.only=TRUE)
@@ -191,10 +191,10 @@ deg_ranks <- lapply(deg_list, function(x){
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% mirrored_comparisons]
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% c("A - vs - B, C, P","A, P - vs - B, C")]
 
-hallmark_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/h.all.v6.2.symbols.gmt'))
-kegg_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.kegg.v6.2.symbols.gmt'))
-biocarta_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.biocarta.v6.2.symbols.gmt'))
-reactome_gsigs <- as.list(qusage::read.gmt('../data/msigdb_v6.2_GMTs/c2.cp.reactome.v6.2.symbols.gmt'))
+hallmark_gsigs <- as.list(qusage::read.gmt('../data/h.all.v6.2.symbols.gmt'))
+kegg_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.kegg.v6.2.symbols.gmt'))
+biocarta_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.biocarta.v6.2.symbols.gmt'))
+reactome_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.reactome.v6.2.symbols.gmt'))
 ```
 
 Generate the enrichment scores & coerce to dataframe
@@ -291,7 +291,7 @@ tmp <- df %>% dplyr::select(sample_comparison, pathway, NES) %>%
 ## Visualize gene set enrichments as a heatmap
 
 Make one plot per gene set database and visualize as a set of stacked heatmaps.
-```{r}
+```{r fig.height=20, fig.width=16, message=FALSE, warning=FALSE}
 # set up themes for ggplotting
 theme <- theme(text = element_text(size=16),
                axis.text.y = element_text(size=18, face='bold'),
@@ -329,13 +329,13 @@ pathway_hm
 # Integrate TCGA expression information
 
 ## PCA
-```{r fig.height=10, fig.width=10, warning=FALSE}
+```{r fig.height=15, fig.width=15, warning=FALSE}
 ind$label[1:4] <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
 ind$sample <- ind$label
 ind[is.na(ind$sample),]$sample <- 'TCGA-GBM'
 case_int_pcs <- ind
 
-tcga_pca <- ggplot(data = ind) + 
+tcga_pca <- ggplot(data = case_int_pcs) + 
   aes(x=Dim.1, y=Dim.2, color=sample, label=label) +
   geom_density2d(color="#7f7f7f", bins=50, alpha=0.7) + 
   geom_jitter(alpha=0.7, size=5) +
@@ -351,44 +351,51 @@ tcga_pca
 
 Objective: get a measure (a p-value) of whether the variance between my four samples is greater than if you were to take the variance four random TCGA samples. To do this, do resamplings of 10% of the total possible combinations of 4 tcga-GBM samples from a pool of 155 samples.
 ```{r}
-ind <- as.data.frame(t(batch.adj.v[rownames(batch.adj.v) %in% checkpoint.genes, ]))
-ind$submitter_id <- rownames(ind)
-ind$label <- ind$submitter_id
-ind$label[!ind$label %in% c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C') ] <- NA
 
 
 checkpoint.genes <- c('TIM3', 'HAVCR2', 'GMZA','CD208','LAMP3', 'CD28', 'CD3D', 'CD3G',
  'CD3E', "PDCD1LG2", 'CD274', 'PDCD1LG1', 'PDL1', "FOXP3", 'CD20', 'MS4A1', 'CD68', 
  'CD34', 'CD38', 'CD68', 'LAMP4', 'SCARD1', 'GP110', 'CD4', 'PDCD1', 'CD274')
 
+chk <- as.data.frame(t(batch.adj.v[rownames(batch.adj.v) %in% checkpoint.genes, ]))
+chk$submitter_id <- rownames(chk)
+chk$label <- chk$submitter_id
+chk$label[!chk$label %in% c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C') ] <- NA
+
 
 # clean up gene names
-colnames(ind)[1] <- 'PDL1' # 'PDCD1LG1'/CD274 is PDL1
-colnames(ind)[5] <- 'CD3' # use CD3D expression only
-colnames(ind)[10] <- 'TIM3' # HAVCR2
-colnames(ind)[11] <- 'DCLAMP' # LAMP3
-colnames(ind)[12] <- 'PD1' # PDCD1 is PD1
-colnames(ind)[13] <- 'PDL2' # 'PDCD1LG2' is PDL2
+colnames(chk)[1] <- 'PDL1' # 'PDCD1LG1'/CD274 is PDL1
+colnames(chk)[5] <- 'CD3' # use CD3D expression only
+colnames(chk)[10] <- 'TIM3' # HAVCR2
+colnames(chk)[11] <- 'DCLAMP' # LAMP3
+colnames(chk)[12] <- 'PD1' # PDCD1 is PD1
+colnames(chk)[13] <- 'PDL2' # 'PDCD1LG2' is PDL2
 val_cols <- c('PD1', 'PDL1', 'PDL2', 'TIM3', 'CD28', 'CD3', 'CD4', 'FOXP3', 'DCLAMP')
-ind <- ind[, c(val_cols, 'submitter_id', 'label')]
+chk <- chk[, c(val_cols, 'submitter_id', 'label')]
 
-ind$submitter_id <- as.character(ind$submitter_id)
+chk$submitter_id <- as.character(chk$submitter_id)
 
+```
+
+```{r}
 # separate out samples from case study
-ref_df <- ind[1:4,]
+ref_df <- chk[1:4,]
 ref_df <- data.frame(var=sapply(ref_df[, val_cols], var),
                       samp_type=as.character('test'),
                       val=val_cols)
 
 set.seed(0)
 
-length(combn(ind[- c(1:4),]$submitter_id, 4, simplify=FALSE))
-boot_pool <- ind[- c(1:4),]
+length(combn(chk[- c(1:4),]$submitter_id, 4, simplify=FALSE))
+boot_pool <- chk[- c(1:4),]
 # grab all unique combinations of 4 from the pool of 155 TCGA samples
 # and then only take 10% of that cause there's too many
 combinations <- combn(boot_pool$submitter_id, 4, simplify=FALSE)
 combinations <- base::sample(combinations, length(combinations)*0.1)
+```
 
+
+```{r}
 # function to take variance of each combination of 4 for each gene/column
 boot_fx <- function(x){
   # grab the combination of 4
@@ -405,7 +412,8 @@ boot_fx <- function(x){
 # do the resampling; using 3 cores (but the more the merrier!), and then bind the rows.
 boot_pool <- bind_rows(pbmclapply(combinations, boot_fx, mc.cores=3))
 all_boots <- bind_rows(ref_df, boot_pool)
-
+```
+```{r}
 # get a measure of whether the variance between my four samples is greater than
 # if you were to take four random TCGA samples. 
 pvals <- lapply(levels(factor(all_boots$val)), function(i){
@@ -436,8 +444,8 @@ pvaldf
 
 
 ## plot the checkpoint violins
-```{r}
-ind2 <- tidyr::gather(ind, gene, cpm, val_cols)
+```{r fig.height=8, fig.width=20, message=FALSE, warning=FALSE}
+ind2 <- tidyr::gather(chk, gene, cpm, val_cols)
 ind2$gene <- as.factor(ind2$gene)
 ind2$cpm <- as.numeric(ind2$cpm)
 
@@ -460,3 +468,10 @@ checkpoint_violins <- ggplot(data=ind2) +
 
 checkpoint_violins
 ```
+
+
+# RSession Info
+```{r}
+sessionInfo()
+```
+
