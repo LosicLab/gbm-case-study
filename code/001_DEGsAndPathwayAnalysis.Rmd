@@ -18,26 +18,28 @@ Note: Some of the figures in this document use grid.arrange or ggarrange. The he
 # Setup
 ```{r include=FALSE}
 
-libs <- c('DESeq2', 'edgeR', 'limma', 'tidyverse', 'combinat', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'ggpubr', 'fgsea', 'ggbeeswarm', 'MESS', 'pbmcapply')
+libs <- c('DESeq2', 'edgeR', 'limma', 'tidyverse', 'combinat', 'ggrepel','gridExtra', 'grid',
+          'org.Hs.eg.db', 'AnnotationDbi', 'ggpubr', 'fgsea', 'ggbeeswarm', # 'MESS', 'pbmcapply', # (for running TCGA bootstrap resampling)
+           'lattice')
 lapply(libs, library, character.only=TRUE)
 rm(libs)
 
 # set up themes for ggplotting
 theme <- theme(legend.position = 'bottom',
                legend.justification = 'left',
-               text = element_text(size=12),
-               axis.text.y = element_text(size=18, hjust = 1, face='bold'),
-               axis.text.x = element_text(size=12, hjust = 1, face='bold'),
-               axis.title = element_text(size=14, face = "bold"),
-               legend.text= element_text(size=12),
-               legend.title= element_text(size=14, face='bold'),
-               strip.text=element_text(size=16, face='bold'),
+               text = element_text(size=16),
+               axis.text = element_text(size=16, hjust = 1, face='bold'),
+               axis.title = element_text(size=18, face = "bold"),
+               legend.title= element_text(size=18, face='bold'),
+               strip.text=element_text(size=18, face='bold'),
                plot.title=element_text(size=18, face='bold'))
 # load inputs
 
 load("../data/001_DEGsAndPathwayAnalysis_inputs.rdata")
 load("../data/tcga_exprs_integration.rdata")
-
+ind <- read_tsv('../data/tcga_exprs_integration.tsv.gz')
+  
+  
 cbpal <-  c("#CC79A7", # purple, primary
             "#E69F00", # yellow, A
             "#56B4E9", # blue, B
@@ -49,14 +51,15 @@ source("functions.r")
 
 
 # DEG analysis
+
 ## Create design matrix
 
-```{r }
-# create  design matrix using all permunations of sample codes.
-# 1 and 0 corresponds to which side of the comparison the sample in the sample_names column is.
-# the sample names will just correspond to the rownames of the phenotype table. this gets combined
-# in the for-loop below.
 
+Create  design matrix using all permunations of sample codes. 1 and 0 corresponds to which side of the comparison the sample in the sample_names column is. The sample names will just correspond to the rownames of the phenotype table. this gets combined in a for-loop later.
+
+This design matrix is referred to as the "pooled comparison strategy" used in the analysis, as it allows us to look at the differences between different regions without resorting entirely to 1v1 comparisons. This way, we can identify gene signatures unique to a particular region compared to the rest, or to identify gene signatures that may be associated with samples containing similar clonal architectures from the previous clonevol analysis.
+
+```{r }
 d1 <- ((combinat::permn(as.character(c('1', '1', '0', '0')))))
 d1 <- t( unique( data.frame( matrix(unlist(d1), nrow = factorial(4), byrow = T))))
 class(d1) <- "numeric"
@@ -75,6 +78,7 @@ rm(d1, d2)
 
 
 ## Generate DEG results using pooled comparisons in DESeq2
+
 ```{r message=FALSE, warning=FALSE}
 comparison_list <- NULL # store the comparisons here.
 deg_list <- NULL # store the results of the comparison here.
@@ -123,10 +127,9 @@ top_genes <- lapply(deg_list, function(x){
     x <- x %>%  filter(!is.na(padj)) %>%
         filter(padj < 0.5) %>%
         left_join(genes, by=c('ensid'))
-    n <- 25
-    x1 <- x %>% top_n(n, wt=as.numeric(-log(padj)))
-    x2 <- x %>% filter(log2FoldChange > 1) %>% top_n(n, wt=log2FoldChange)
-    x3 <- x %>% filter(log2FoldChange < -1) %>% top_n(n, wt=abs(log2FoldChange))
+    x1 <- x %>% top_n(15, wt=as.numeric(-log(padj)))
+    x2 <- x %>% filter(log2FoldChange > 1) %>% top_n(10, wt=abs(log2FoldChange))
+    x3 <- x %>% filter(log2FoldChange < -1) %>% top_n(10, wt=abs(log2FoldChange))
     x <- unique(rbind(x1, x2, x3))
 
     rm(x1, x2, x3)
@@ -158,13 +161,12 @@ summary(as.factor(top_genes$sample_comparison))
 
 ## Visualize with volcano plot
 
-```{r fig.height=20, fig.width=20}
+```{r fig.height=8, fig.width=25}
 volcano_plot_filt <- ggplot(data=deg_df[! deg_df$sample_comparison %in% c('A - vs - B, C, P', 'A, P - vs - B, C'),]) + aes(x=log2FoldChange, y=-log(padj), color=biotype) +
     geom_point() +
-    geom_label_repel(data=top_genes[! top_genes$sample_comparison %in% c('A - vs - B, C, P', 'A, P - vs - B, C'),], aes(label=gene), show.legend=FALSE,  force=3, size=3) +
-    facet_wrap(~ sample_comparison, scales='free',nrow=2) +
-    theme_classic() + theme +
-    labs(title='Volcano Plot: DEGs in Pooled Sample Comparisons')
+    geom_label_repel(data=top_genes[! top_genes$sample_comparison %in% c('A - vs - B, C, P', 'A, P - vs - B, C'),], aes(label=gene), show.legend=FALSE,  force=3, size=4) +
+    facet_wrap(~ sample_comparison, scales='free',nrow=1) +
+    theme_classic() + theme
 
 volcano_plot_filt
 ```
@@ -191,10 +193,7 @@ deg_ranks <- lapply(deg_list, function(x){
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% mirrored_comparisons]
 deg_ranks <- deg_ranks[! names(deg_ranks) %in% c("A - vs - B, C, P","A, P - vs - B, C")]
 
-hallmark_gsigs <- as.list(qusage::read.gmt('../data/h.all.v6.2.symbols.gmt'))
-kegg_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.kegg.v6.2.symbols.gmt'))
-biocarta_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.biocarta.v6.2.symbols.gmt'))
-reactome_gsigs <- as.list(qusage::read.gmt('../data/c2.cp.reactome.v6.2.symbols.gmt'))
+load('../data/msigdb_gene_signatures.rdata')
 ```
 
 Generate the enrichment scores & coerce to dataframe
@@ -288,6 +287,7 @@ tmp <- df %>% dplyr::select(sample_comparison, pathway, NES) %>%
 
 })
 ```
+
 ## Visualize gene set enrichments as a heatmap
 
 Make one plot per gene set database and visualize as a set of stacked heatmaps.
@@ -329,21 +329,23 @@ pathway_hm
 # Integrate TCGA expression information
 
 ## PCA
-```{r fig.height=15, fig.width=15, warning=FALSE}
-ind$label[1:4] <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
-ind$sample <- ind$label
-ind[is.na(ind$sample),]$sample <- 'TCGA-GBM'
-case_int_pcs <- ind
 
+```{r}
+case_int_pcs <- ind
+```
+
+```{r}
 tcga_pca <- ggplot(data = case_int_pcs) + 
   aes(x=Dim.1, y=Dim.2, color=sample, label=label) +
   geom_density2d(color="#7f7f7f", bins=50, alpha=0.7) + 
-  geom_jitter(alpha=0.7, size=5) +
+  geom_point(alpha=0.7, size=5) +
   geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
   labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
   theme_classic() + theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
   theme + scale_color_manual(values = cbpal)
+```
 
+```{r  fig.height=7, fig.width=7, warning=FALSE}
 tcga_pca
 ```
 
@@ -351,33 +353,13 @@ tcga_pca
 
 Objective: get a measure (a p-value) of whether the variance between my four samples is greater than if you were to take the variance four random TCGA samples. To do this, do resamplings of 10% of the total possible combinations of 4 tcga-GBM samples from a pool of 155 samples.
 ```{r}
-
-
-checkpoint.genes <- c('TIM3', 'HAVCR2', 'GMZA','CD208','LAMP3', 'CD28', 'CD3D', 'CD3G',
- 'CD3E', "PDCD1LG2", 'CD274', 'PDCD1LG1', 'PDL1', "FOXP3", 'CD20', 'MS4A1', 'CD68', 
- 'CD34', 'CD38', 'CD68', 'LAMP4', 'SCARD1', 'GP110', 'CD4', 'PDCD1', 'CD274')
-
-chk <- as.data.frame(t(batch.adj.v[rownames(batch.adj.v) %in% checkpoint.genes, ]))
-chk$submitter_id <- rownames(chk)
-chk$label <- chk$submitter_id
-chk$label[!chk$label %in% c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C') ] <- NA
-
-
-# clean up gene names
-colnames(chk)[1] <- 'PDL1' # 'PDCD1LG1'/CD274 is PDL1
-colnames(chk)[5] <- 'CD3' # use CD3D expression only
-colnames(chk)[10] <- 'TIM3' # HAVCR2
-colnames(chk)[11] <- 'DCLAMP' # LAMP3
-colnames(chk)[12] <- 'PD1' # PDCD1 is PD1
-colnames(chk)[13] <- 'PDL2' # 'PDCD1LG2' is PDL2
-val_cols <- c('PD1', 'PDL1', 'PDL2', 'TIM3', 'CD28', 'CD3', 'CD4', 'FOXP3', 'DCLAMP')
-chk <- chk[, c(val_cols, 'submitter_id', 'label')]
-
+checkpoint.genes <- c("PD1","PDL1","PDL2","TIM3","CD28","CD3","CD4","FOXP3","DCLAMP")
+val_cols <- checkpoint.genes
+chk <- ind
 chk$submitter_id <- as.character(chk$submitter_id)
-
 ```
 
-```{r}
+```{r eval=FALSE}
 # separate out samples from case study
 ref_df <- chk[1:4,]
 ref_df <- data.frame(var=sapply(ref_df[, val_cols], var),
@@ -395,7 +377,7 @@ combinations <- base::sample(combinations, length(combinations)*0.1)
 ```
 
 
-```{r}
+```{r eval=FALSE}
 # function to take variance of each combination of 4 for each gene/column
 boot_fx <- function(x){
   # grab the combination of 4
@@ -410,12 +392,13 @@ boot_fx <- function(x){
 }
 
 # do the resampling; using 3 cores (but the more the merrier!), and then bind the rows.
-boot_pool <- bind_rows(pbmclapply(combinations, boot_fx, mc.cores=3))
+boot_pool <- bind_rows(pbmclapply(combinations, boot_fx, mc.cores=2))
 all_boots <- bind_rows(ref_df, boot_pool)
 ```
-```{r}
-# get a measure of whether the variance between my four samples is greater than
-# if you were to take four random TCGA samples. 
+
+Get a measure of whether the variance between my four samples is greater than if you were to take four random TCGA samples. 
+
+```{r eval=FALSE}
 pvals <- lapply(levels(factor(all_boots$val)), function(i){
     x <- all_boots %>% filter(val == i) %>% as.data.frame()
     test_point <- x %>% filter(samp_type == "test") %>% dplyr::select(var) %>% deframe()
@@ -438,35 +421,92 @@ pvals <- unlist(pvals)
 
 pvaldf <- data.frame(pval=pvals,
                     gene=names(pvals))
-
-pvaldf
 ```
 
 
 ## plot the checkpoint violins
-```{r fig.height=8, fig.width=20, message=FALSE, warning=FALSE}
+```{r eval=FALSE}
 ind2 <- tidyr::gather(chk, gene, cpm, val_cols)
 ind2$gene <- as.factor(ind2$gene)
 ind2$cpm <- as.numeric(ind2$cpm)
 
 
 ind2 <- ind2 %>% inner_join(pvaldf, by=c('gene'))
-
-ind2$sample <- as.character(ind2$label)
-ind2$sample[is.na(ind2$sample)] <- 'TCGA-GBM'
 ind2$sample <- as.factor(ind2$sample)
+```
+Note: we saved a pre-computed version of this to reduce runtime and will use it in this RMarkdown document.
+```{r}
+ind2 <- read_tsv('../data/bootstrap_tested_tcga_checkpoint_genes_long.tsv.gz')
+```
 
-checkpoint_violins <- ggplot(data=ind2) + 
-            aes(y=cpm, x=gene, color=sample) + 
-            geom_violin(alpha=0.05, aes(color=NULL), fill="#7f7f7f", show.legend = FALSE) + 
-            geom_boxplot(width=0.1, aes(color=NULL, fill=NULL), show.legend = FALSE ) + 
-            geom_beeswarm(data=ind2[ind2$sample =='TCGA-GBM',],cex=0.8,alpha=0.4, size=2, show.legend=FALSE) +
-            geom_point(data=ind2[ind2$sample !='TCGA-GBM',], size=6, alpha=0.8) +
-            theme_classic() + theme + labs(y='Log2(CPM)', x='', color='Sample') + 
-            geom_text(data=pvaldf[pvaldf$pval<0.05,], y=-5,size=6, aes(x=gene,  label=paste('P =',round(pval, digits=4)), color=NULL), show.legend=FALSE ) +
+```{r}
+checkpoint_violins <- ggplot(data=ind2) + aes(y=cpm, x=gene, color=sample) + 
+  #geom_violin(alpha=0.05, aes(color=NULL), fill="#7f7f7f", show.legend = FALSE) + 
+  geom_boxplot(width=0.5, aes(color=NULL, fill=NULL), show.legend = FALSE ) +
+  geom_beeswarm(data=ind2[ind2$sample =='TCGA-GBM',], alpha=0.4, size=2, show.legend=FALSE) +
+  geom_point(data=ind2[ind2$sample !='TCGA-GBM',], size=6, alpha=0.75) +
+  theme_classic() + theme + labs(y='Voom Normalized Expression', x='', color='Sample') + 
+  # don't add duplicate labels
+  geom_text(data=ind2[(ind2$pval<0.05) & (ind2$sample=='Primary'),],
+            y=-5,size=6, show.legend=FALSE,
+            aes(x=gene, label=paste('P =',round(pval, digits=4)), color=NULL)) +
             scale_color_manual(values = cbpal, aesthetics = 'color')
+```
 
+```{r  fig.height=8, fig.width=20, message=FALSE, warning=FALSE}
 checkpoint_violins
+```
+
+# MORE PCAs
+
+## color based on survival
+
+```{r}
+surv_pca <- ggplot(data = case_int_pcs) + 
+  aes(x=Dim.1, y=Dim.2, color=MonthsOverallSurvival, label=label, shape=VitalStatusFactor) +
+  geom_density2d(color="#7f7f7f", bins=50, alpha=0.7, aes(shape=NULL, color=NULL)) + 
+  geom_point(alpha=0.7, size=5) +
+  geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
+  labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
+  theme_classic() + 
+  theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
+  theme + scale_color_gradient(low="white", high="black")
+```
+
+```{r  fig.height=7, fig.width=7, warning=FALSE}
+surv_pca
+```
+
+## color based on checkpoint gene
+
+```{r}
+gene_pca <- ggplot(data = ind2) + 
+  aes(x=Dim.1, y=Dim.2, color=cpm, label=label) +
+  geom_density2d(color="#7f7f7f", bins=50, alpha=0.7) + 
+  geom_point(alpha=0.7, size=5) +
+  geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
+  labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
+  facet_wrap(~ gene) +
+  theme_classic() + 
+  theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
+  theme + scale_color_gradient(low="white", high="blue", name='Normalized Expression')
+```
+
+```{r  fig.height=15, fig.width=15, warning=FALSE}
+gene_pca
+```
+# Manuscript Figure 4
+
+```{r, fig.height=18, fig.width=34}
+tcga_integration <- ggarrange(tcga_pca, checkpoint_violins, nrow=2, heights=c(2,0.7), align='v', common.legend=TRUE, legend='right')
+
+pdf('fig4_withCheckpointViolins.pdf', height=18, width=34)
+grid.arrange(pathway_hm, tcga_integration, ncol=2, widths=c(0.8, 1.25))
+dev.off()
+```
+
+```{r}
+sfig3 <- ggarrange(surv_pca, gene_pca, ncol=2)
 ```
 
 

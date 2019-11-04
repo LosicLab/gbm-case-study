@@ -109,16 +109,17 @@ cnv_heatmap_df <- unique(cnv_heatmap_df)
 cnv_heatmap_df$query_gene <- as.character(cnv_heatmap_df$query_gene)
 
 cnv_heatmap_df <- cnv_heatmap_df %>% 
-  group_by(query_gene, sample) %>% 
-  summarise(average_cnv=mean(log2))
+    group_by(query_gene, sample) %>% 
+    summarise(average_cnv=mean(log2)) %>%
+    ungroup()
 
+cnv_heatmap_df$sample <- as.factor(cnv_heatmap_df$sample)
 levels(cnv_heatmap_df$sample) <- c('Recurrent_A', 'Recurrent_B', 'Recurrent_C', 'Primary')
 
 cnv_list <- c(gene_list1, 'SND1', "MIER2", "VAV1")
 cnv_heatmap_df <- cnv_heatmap_df %>% filter(query_gene %in% cnv_list)
 cnv_heatmap_df$cnv_type <- cut(cnv_heatmap_df$average_cnv, include.lowest = TRUE, breaks = c(-10,-1, -0.25, 0.25, 1, 10))
 levels(cnv_heatmap_df$cnv_type) <- c('deletion', 'mild deletion', 'neutral', 'mild amplification', 'amplification')
-
 
 cnv_heatmap_df$sample <- fct_relevel(cnv_heatmap_df$sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C'))
 
@@ -263,106 +264,6 @@ moverlap <- ggplot(data=mutation_overlap2) + aes(x = sample1, y = sample2) +
 
 moverlap
 ```
-
-
-# Clonality Analysis
-
-```{r}
-load('../data/sciclone_vafs_and_cnv_inputs.rdata')
-
-vaf_table <- do.call(rbind, vaf_list)
-
-ggplot(data=vaf_table) + 
-  aes(x=as.factor(chromNum), y=VAF, fill=as.factor(chromNum)) + 
-  geom_violin(show.legend=FALSE) + 
-  geom_hline(yintercept = 50, linetype='dashed', color='gray') +
-  theme_classic()
-
-vaf_list_clean <- lapply(vaf_list, function(x){
-    x[! (as.factor(x$chromNum) %in% c(1,7,9,12,14)),]})
-
-rm(vaf_table)
-```
-
-Prepare sample grouping and annotation.
-```{r}
-names <- c("Recurrent_A", 'Recurrent_B', 'Recurrent_C', 'Primary')
-# prepare sample grouping
-sample.groups <- as.factor(c('R', 'R', 'R', 'P'))
-names(sample.groups) <- names
-
-# prepare time-point information for plots
-# first recurrence was after two (28-day) cycles of TMZ.
-time.points <- c(56,56,56,0)
-names(time.points) <- names
-
-clone.colors <- c('#999793', '#8d4891', '#f8e356', '#fe9536', '#d7352e')
-
-```
-
-Run Sciclone
-```{r message=FALSE, warning=FALSE}
-set.seed(0)
-sc <- sciClone(vafs=vaf_list_clean,
-               copyNumberCalls = cnv_list,
-               cnCallsAreLog2 = TRUE,
-               sampleNames = names,
-               minimumDepth = 300,
-               useSexChrs = FALSE,
-               verbose = FALSE)
-
-sc_vafs <- data.frame(sc@vafs.merged)
-```
-
-Remove NA clusters and negative clusters. Preview the results.
-```{r}
-sc_vafs <- sc_vafs[!is.na(sc_vafs$cluster) & sc_vafs$cluster > 0,]
-
-sc_vafs
-```
-
-```{r fig.height=8, fig.width=10}
-sc.plot2d(sc, singlePage = TRUE, ylim=40, xlim=40)
-```
-
-```{r fig.height=8, fig.width=10}
-sc_long <- sc_vafs %>%
-             tidyr::gather(sample, VAF, paste0(names, '.vaf')) %>%
-             mutate(sample=gsub('.vaf', '', sample, fixed=TRUE))
-
-sc_box <- ggplot(data =  sc_long) + aes(x = as.factor(cluster), y = VAF, color=as.factor(cluster)) +
-             geom_boxplot(width=0.5, show.legend=FALSE) + geom_jitter(alpha=0.7) + facet_wrap(~sample, ncol=1) +
-             theme_classic() + scale_color_manual(values=clone.colors)
-
-sc_box
-```
-
-```{r}
-set.seed(0)
-y = infer.clonal.models(variants = sc_vafs,
-                        vaf.col.names = paste0(names, '.vaf'),
-                        cluster.col.name =  "cluster",
-                        cancer.initiation.model = 'polyclonal', 
-                        subclonal.test = 'bootstrap', 
-                        subclonal.test.model = 'non-parametric',
-                        num.boots = 8000,
-                        sample.names = names,
-                        cluster.center = 'median',
-                        min.cluster.vaf = 0.05,
-                        sum.p = 0.05,
-                        alpha = 0.05,
-                        random.seed = 0,
-                        seeding.aware.tree.pruning = TRUE)
-
-clonal_models = convert.consensus.tree.clone.to.branch(y, branch.scale = 'sqrt')
-```
-
-```{r fig.height=7, fig.width=7}
-plot.tree.clone.as.branch(clonal_models$matched$merged.trees[[1]], branch.width =0.5,
-                          node.size = 1.5, node.label.size = 0.5,
-                          tree.rotation=180)
-```
-
 
 
 # RSession Info

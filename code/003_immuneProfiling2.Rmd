@@ -18,7 +18,7 @@ output:
 
 ```{r include=FALSE}
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
-libs <- c('tidyverse','ggrepel','RColorBrewer', 'ggpubr', 'tcR')
+libs <- c('tidyverse','ggrepel','RColorBrewer', 'ggpubr',"gridExtra","grid","lattice")
 lapply(libs, library, character.only=TRUE, verbose=FALSE, quietly=TRUE)
 rm(libs)
 ```
@@ -176,17 +176,21 @@ tmb_df <- somatic_mutations %>% group_by(sample, is_neoantigen) %>%
   ungroup() %>%
   mutate(sample =  fct_relevel(sample, c('Primary', "Recurrent_A", 'Recurrent_B', 'Recurrent_C')))
 
+
+tmb2 <- tmb_df %>% group_by(sample) %>% summarise(tmb=sum(tmb)) %>% inner_join(tmb_df[tmb_df$is_neoantigen==TRUE,c('count', "is_neoantigen", 'sample')], by=c('sample'))
+
+
 tmb_df %>% filter(is_neoantigen)
 ```
 
 Select which neoantigens to show.
 ```{r }
 top_genes <- vcf_master_epitope %>%
-    filter(ic50 < 500) %>%
-    filter(AD_T > 5) %>%
-    filter(length == 9) %>%
-    group_by(sample) %>%
-    top_n(50, wt=-ic50)
+    filter(ic50 < 500) %>% # ic50 binding cutoff
+    filter(AD_T > 5) %>% # at least 5 reads
+    filter(length == 9) %>% # make sure you have 9mers
+    group_by(sample) %>% 
+    top_n(50, wt=-ic50) # get top 50 ic50's per sample
 
 top_genes <- unique(c(levels(as.factor(top_genes$gene)),
                       'PTEN', 'TP53', 'QKI', 'MAPK2', 'MAPK1', 'MAPK4', 'VEPH1',
@@ -232,6 +236,8 @@ ninemer_df$allele <- as.factor(ninemer_df$allele)
 tmb_barplot <- ggplot(data=tmb_df) + 
   aes(x=sample,y=tmb, fill=is_neoantigen) + 
   geom_bar(stat='identity') +
+  geom_text(data=tmb2, aes(label=paste('N =',count), fill=NULL), 
+            size=8.5,nudge_y = 0.5, show.legend=FALSE) +
   labs(x='', y='TMB (Muts/MB)', fill='is neoantigen?') +
   theme_classic() +
   theme +
@@ -290,7 +296,6 @@ xcell_results
 Show all xcell results, with the exception of stromal and other non-immune cell-types.
 
 ```{r}
-
 # filter xcell results to show a subset of celltypes
 cell_types <- c(# xCELL's aggregate scores
                 "MicroenvironmentScore", "StromaScore", "ImmuneScore",
@@ -321,6 +326,7 @@ xcell_showall <- ggplot(data=xcell_results) +
 
 xcell_showall
 ```
+
 Filter xCELL results to showcase a subset of celltypes.
 ```{r}
 xcell_filt <- xcell_results %>%
@@ -339,10 +345,26 @@ xcell_showfilt <- ggplot(data=xcell_filt) +
               geom_point(alpha=0.75, size=8) + geom_line(alpha=0.6) +
               theme_classic() + theme + scale_color_manual(values=cbpal) +
               rotate_x_text(angle=45) + scale_x_discrete(drop=FALSE) +
-              labs(y='percent (%)', x='', title='xCELL quantification') + coord_flip()
+              labs(y='percent (%)', x='') + coord_flip()
 
 xcell_showfilt
 ```
+
+# Manuscript Figure 3
+```{r  fig.width=24, fig.height=22}
+cell_quant <- ggarrange(ihc_barplot2, xcell_showfilt, ncol=2,  widths=c(1,2))
+
+grid.arrange(cell_quant, immunoprint_ninemer_chart, ncol=2, widths=c(1.8,1))
+```
+
+
+# Save results
+```{r eval=FALSE, include=TRUE}
+pdf('figure3_rplots.pdf', width=24, height=22)
+grid.arrange(cell_quant, immunoprint_ninemer_chart, ncol=2, widths=c(1.8,1))
+dev.off()
+```
+
 
 # RSession Info
 ```{r}
