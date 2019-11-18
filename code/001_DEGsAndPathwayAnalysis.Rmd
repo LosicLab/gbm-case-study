@@ -206,7 +206,6 @@ all_fgsea <- list(hallmark_fgsea = gsea_lister(rank_list = deg_ranks, sig_list =
                   biocarta_fgsea = gsea_lister(rank_list = deg_ranks, sig_list = biocarta_gsigs, sig_name = 'BIOCARTA')
 )
 
-rm(hallmark_gsigs, kegg_gsigs, reactome_gsigs, biocarta_gsigs)
 ```
 
 Select the top pathways, filter irrelevant terms, and order the pathways via hierarchical clustering.
@@ -245,15 +244,14 @@ data_list <- lapply(all_fgsea, function(x){
   return(df)
 })
 
-# define terms that are not relevant, and will be hidden in the resulting visualization
 terms <- c('INFLUENZA', 'CELL_CYCLE', 'MITOTIC', 'S_PHASE', 'G1_S_TRANSITION', 'ASTHMA', 'AUTOIMMUNE_THYROID_DISEASE',
 'INFECTION','DISEASE', 'INTESTINAL_IMMUNE_NETWORK_FOR_IGA_PRODUCTION','METABOLISM', 'APICAL_SURFACE','GENESIS',
  '43S', 'SYNAP','NEUROTRANSMITTER', 'GABA', 'GLUTAMATE', 'POTASSIUM_CHANNELS', 'CHANNEL_TRANSPORT', 'CELL_LINEAGE',
  'LUPUS', 'NEURONAL',  'RP_DEPENDENT_COTRANSLATIONAL_PROTEIN_TARGETING_TO_MEMBRANE', 'TRANSLATION', 'proteasome', 'complement', 'homologous_recombination',
-"peptide_chain",'second_messenger','NONSENSE_MEDIATED_DECAY', 'G2M_checkpoint', 'G2_M_CHECKPOINT', 'IMMUNOREGULATORY_INTERACTIONS_BETWEEN',
-'RIBOSOME', 'TIGHT_JUNCTION') 
+"peptide_chain",'second_messenger', 'REACTIVE_OXYGEN_SPECIES', 'NONSENSE_MEDIATED_DECAY', 'G2M_checkpoint', 'G2_M_CHECKPOINT', 'IMMUNOREGULATORY_INTERACTIONS_BETWEEN',
+'RIBOSOME', 'TIGHT_JUNCTION' ) 
 
-# apply filters
+
 data_filt <- lapply(data_list, function(x){
 
   y <- x
@@ -291,7 +289,7 @@ tmp <- df %>% dplyr::select(sample_comparison, pathway, NES) %>%
 ## Visualize gene set enrichments as a heatmap
 
 Make one plot per gene set database and visualize as a set of stacked heatmaps.
-```{r fig.height=20, fig.width=16, message=FALSE, warning=FALSE}
+```{r}
 # set up themes for ggplotting
 theme <- theme(text = element_text(size=16),
                axis.text.y = element_text(size=18, face='bold'),
@@ -302,6 +300,11 @@ theme <- theme(text = element_text(size=16),
                strip.text=element_text(size=24, face='bold'),
                plot.title=element_text(size=28, face='bold'))
 
+```
+
+
+
+```{r }
 plot_list <- lapply(data_filt, function(x){
   plot <- ggplot(data=x) +
   aes(x=sample_comparison, y=pathway, fill=as.numeric(NES)) +
@@ -321,10 +324,11 @@ plot_list[[4]] <- plot_list[[4]] + theme_classic() + theme + rotate_x_text(angle
 
 names(plot_list) <- c('HALLMARK', 'KEGG', 'REACTOME', 'BIOCARTA')
 pathway_hm <- ggarrange(plotlist=plot_list, nrow=length(all_fgsea), align='v',  common.legend=TRUE, legend='right', heights=c(1.2,0.6,0.5,1.6))
-
-pathway_hm
 ```
 
+```{r fig.height=20, fig.width=14, message=FALSE, warning=FALSE}
+pathway_hm
+```
 
 # Integrate TCGA expression information
 
@@ -334,19 +338,22 @@ pathway_hm
 case_int_pcs <- ind
 ```
 
+
 ```{r}
-tcga_pca <- ggplot(data = case_int_pcs) + 
-  aes(x=Dim.1, y=Dim.2, color=sample, label=label) +
-  geom_density2d(color="#7f7f7f", bins=50, alpha=0.7) + 
-  geom_point(alpha=0.7, size=5) +
-  geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
+surv_pca <- ggplot(data = case_int_pcs) + 
+  aes(x=Dim.1, y=Dim.2, color=log(MonthsOverallSurvival), label=label, shape=VitalStatusFactor) +
+  geom_density2d(color='black',alpha=0.5, bins=50, aes(shape=NULL)) + 
+  geom_point(alpha=0.8, size=6) +
+  geom_label_repel(size=8, show.legend=FALSE, force=10, point.padding = unit(0.5, 'lines'), fontface='bold') +
   labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
-  theme_classic() + theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
-  theme + scale_color_manual(values = cbpal)
+  theme_classic() + 
+  theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
+  theme + scale_color_gradient(low='ivory', high='black', limits=c(-2,5), breaks=seq(-2,5,length.out = 5)) + 
+  guides(color = guide_colourbar(barwidth = 1.5, barheight = 15)) 
 ```
 
-```{r  fig.height=7, fig.width=7, warning=FALSE}
-tcga_pca
+```{r  fig.height=7, fig.width=7}
+surv_pca
 ```
 
 ## With distributions of specific checkpoint and immune genes
@@ -435,17 +442,17 @@ ind2 <- ind2 %>% inner_join(pvaldf, by=c('gene'))
 ind2$sample <- as.factor(ind2$sample)
 ```
 Note: we saved a pre-computed version of this to reduce runtime and will use it in this RMarkdown document.
-```{r}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 ind2 <- read_tsv('../data/bootstrap_tested_tcga_checkpoint_genes_long.tsv.gz')
 ```
 
 ```{r}
 checkpoint_violins <- ggplot(data=ind2) + aes(y=cpm, x=gene, color=sample) + 
   #geom_violin(alpha=0.05, aes(color=NULL), fill="#7f7f7f", show.legend = FALSE) + 
-  geom_boxplot(width=0.5, aes(color=NULL, fill=NULL), show.legend = FALSE ) +
+  #geom_boxplot(width=0.25, aes(color=NULL, fill=NULL), show.legend = FALSE ) +
   geom_beeswarm(data=ind2[ind2$sample =='TCGA-GBM',], alpha=0.4, size=2, show.legend=FALSE) +
   geom_point(data=ind2[ind2$sample !='TCGA-GBM',], size=6, alpha=0.75) +
-  theme_classic() + theme + labs(y='Voom Normalized Expression', x='', color='Sample') + 
+  theme_classic() + theme + labs(y='Normalized Expression', x='', color='Sample') + 
   # don't add duplicate labels
   geom_text(data=ind2[(ind2$pval<0.05) & (ind2$sample=='Primary'),],
             y=-5,size=6, show.legend=FALSE,
@@ -453,31 +460,11 @@ checkpoint_violins <- ggplot(data=ind2) + aes(y=cpm, x=gene, color=sample) +
             scale_color_manual(values = cbpal, aesthetics = 'color')
 ```
 
-```{r  fig.height=8, fig.width=20, message=FALSE, warning=FALSE}
+```{r  fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
 checkpoint_violins
 ```
 
-# MORE PCAs
-
-## color based on survival
-
-```{r}
-surv_pca <- ggplot(data = case_int_pcs) + 
-  aes(x=Dim.1, y=Dim.2, color=MonthsOverallSurvival, label=label, shape=VitalStatusFactor) +
-  geom_density2d(color="#7f7f7f", bins=50, alpha=0.7, aes(shape=NULL, color=NULL)) + 
-  geom_point(alpha=0.7, size=5) +
-  geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
-  labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
-  theme_classic() + 
-  theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
-  theme + scale_color_gradient(low="white", high="black")
-```
-
-```{r  fig.height=7, fig.width=7, warning=FALSE}
-surv_pca
-```
-
-## color based on checkpoint gene
+Supplementary Figure 3 - overlay onto the PCA
 
 ```{r}
 gene_pca <- ggplot(data = ind2) + 
@@ -487,26 +474,169 @@ gene_pca <- ggplot(data = ind2) +
   geom_label_repel(size=8, show.legend=FALSE, force=10, min.segment.length = 10, segment.size = 1) +
   labs(x='PC-1: 14.3% of variance explained', y='PC-2: 9% of variance explained') +
   facet_wrap(~ gene) +
-  theme_classic() + 
-  theme(plot.margin=margin(0.5,0.5,0.5,0.5, "in")) +
-  theme + scale_color_gradient(low="white", high="blue", name='Normalized Expression')
+  theme_classic() +
+  theme + scale_color_gradient(low="ivory", high="black", name='Norm. Exprs.', limits=c(-5,10), breaks=seq(-5, 10, by=5)) +
+  guides(color = guide_colourbar(barwidth = 1.5, barheight = 25)) 
 ```
 
 ```{r  fig.height=15, fig.width=15, warning=FALSE}
+# pdf('../../figures/tcga_ext.pdf', height=20, width=24)
 gene_pca
+# dev.off()
 ```
+
 # Manuscript Figure 4
+```{r}
+tcga_integration2 <- ggarrange(surv_pca, checkpoint_violins, nrow=2, heights=c(2,0.7), align='v')
+```
+```{r fig.width=34, fig.height=18}
+#pdf('../../figures/fig4.pdf', height=18, width=34)
+grid.arrange(pathway_hm, tcga_integration2, ncol=2, widths=c(0.7, 1.5))
+#dev.off()
+```
 
-```{r, fig.height=18, fig.width=34}
-tcga_integration <- ggarrange(tcga_pca, checkpoint_violins, nrow=2, heights=c(2,0.7), align='v', common.legend=TRUE, legend='right')
+# Survival integration
 
-pdf('fig4_withCheckpointViolins.pdf', height=18, width=34)
-grid.arrange(pathway_hm, tcga_integration, ncol=2, widths=c(0.8, 1.25))
-dev.off()
+
+```{r}
+surv_dens <- ggplot(data = case_int_pcs) + 
+    aes(x=MonthsOverallSurvival) + 
+    geom_density(fill='gray', alpha=0.7, show.legend = FALSE) + 
+    theme_classic() +
+    theme + 
+    geom_vline(data=case_int_pcs[!is.na(case_int_pcs$label),], size=1.5, color='blue',
+               aes(xintercept=MonthsOverallSurvival), show.legend = FALSE, linetype='dashed') + 
+    geom_text(data=case_int_pcs[1,], 
+              aes(x = MonthsOverallSurvival, y=0.02), label = 'Patient Survival', color='blue',
+                    show.legend = FALSE,angle=90, size=8, nudge_x =3, fontface='bold') + 
+    scale_y_continuous(limits = c(0,0.05)) 
 ```
 
 ```{r}
-sfig3 <- ggarrange(surv_pca, gene_pca, ncol=2)
+#pdf('../../figures/survival_density_tcga.pdf', height=4, width=6)
+surv_dens
+#dev.off()
+```
+
+The patient survived almost 1 and a half times longer than the third quartile of tcga survival.
+
+```{r}
+summary(case_int_pcs$MonthsOverallSurvival)
+```
+
+Use ECDF on the TCGA cohort to find what the probability is that our patient survived this long by chance.
+
+```{r}
+ecdf_surv <- ecdf(case_int_pcs$MonthsOverallSurvival)
+
+plot(ecdf_surv)
+```
+
+```{r}
+paste0("The probability that the patient would have survived 25 months by chance alone is ", round((1 - ecdf_surv(25))*100, 2), '%' )
+```
+
+# GSEA for Zhao signatures
+
+Taking the pre-treatment and post-treatment responder and non-responder signatures in figure 3b, and ext data fig 7, do single sample GSEA on the relevant gene sets to see if there is any association.
+
+```{r eval=FALSE, include=FALSE}
+all_msigdb <- qusage::read.gmt('msigdb.v6.2.symbols.gmt') # download from msigdb website
+
+zhao_responder_pretx_dn <- all_msigdb[c('FAELT_B_CLL_WITH_VH3_21_DN', 'MARCHINI_TRABECTEDIN_RESISTANCE_UP',
+                                'GSE14415_INDUCED_VS_NATURAL_TREG_UP', 'SCHAEFFER_PROSTATE_DEVELOPMENT_6HR_UP',
+                                'GSE17721_LPS_VS_POLYIC_8H_BMDC_DN', 'REACTOME_PHASEII_CONJUGATION',
+                                'REACTOME_INSULIN_RECEPTOR_RECYCLING', 'XU_GH1_EXOGENOUS_TARGETS_DN',
+                                'GSE21927_UNTREATED_VS_GMCSF_GCSF_TREATED_BONE_MARROW_DN', 'MTOR_UP.N4.V1_DN',
+                                'GSE45739_NRAS_KO_VS_WT_ACD3_ACD28_STIM_CD4_TCELL_DN',
+                                'GSE21678_WT_VS_FOXO1_FOXO3_KO_TREG_UP', 'REACTOME_BIOLOGICAL_OXIDATIONS',
+                                'LEE_RECENT_THYMIC_EMIGRANT', 'GSE27786_NEUTROPHIL_VS_MONO_MAC_UP')]
+
+zhao_responder_pretx_up <- all_msigdb[c('GROSS_HYPOXIA_VIA_ELK3_AND_HIF1A_DN', 'KEGG_PENTOS_PHOSPHATE_PATHWAY',
+                                      'JAZERI_BREAST_CANCER_BRCA1_VS_BRCA2_UP', 'CHEN_HOXA5_TARGETS_9HR_DN',
+                                      'KEGG_GLYCOSAMINOGLYCAN_BIOSYNTHESIS_HEPARAN_SULFATE')]
+
+
+
+zhao_responder_posttx_dn <- all_msigdb[c('GSE_29615_CTRL_VS_DAY7_LAIV_FLU_VACCINE_PBMC_DN',
+                                         'GSE2770_IL12_VS_TGFB_AND_IL12_TREATED_ACT_CD4_TCELL_48H_DN',
+                                         'GSE21063_CTRL_VS_ANTI_IGM_STIM_BCELL_16H_UP')]
+zhao_responder_posttx_up <- all_msigdb[c('ST_STAT3_PATHWAY', 'PARENT_MTOR_SIGNALING_DN',
+                                         'ABE_VEGFA_TARGETS', 'MARSON_FOXP3_CORE_DIRECT_TARGETS',
+                                         'LIN_TUMOR_ESCAPE_FROM_IMMUNE_ATTACK', 'VILIMAS_NOTCH1_TARGETS_UP',
+                                         'GUTIERREZ_WALDENSTROEMS_MACROGLOBULINEMIA_1_DN',
+                                         'YIH_RESPONSE_TO_ARSENITE_C5', 'RELA_DN.V1_UP',
+                                         'GSE1794_IL4_AND_ANTI_IL12_VS_UNTREATED_2H_ACT_CD4_TCELL_DN',
+                                         'GSE2706_UNSTIM_VS_2H_R848_DC_DN', 'GSE2706_UNSTIM_VS_2H_LPS_AND_R848_DC_DN',
+                                         'GSE22589_SIV_VS_HIV_AND_SIV_INFECTED_DC_UP')]
+
+save(hallmark_gsigs, kegg_gsigs, biocarta_gsigs, reactome_gsigs, zhao_responder_posttx_up, zhao_responder_pretx_dn,zhao_responder_pretx_up,zhao_responder_posttx_dn, file='../data/msigdb_gene_signatures.rdata')
+```
+
+
+```{r}
+set.seed(0)
+
+zhao_enrichments <- list(pretx_responder_down = gsea_lister(rank_list = deg_ranks, sig_list =zhao_responder_pretx_dn,
+                                                            sig_name='PRE-TX_DN'),
+                  pretx_responder_up= gsea_lister(rank_list = deg_ranks, sig_list = zhao_responder_pretx_up, sig_name = 'PRE-TX_UP'),
+                  posttx_responder_down = gsea_lister(rank_list = deg_ranks, sig_list = zhao_responder_posttx_dn, sig_name = 'POST-TX_DN'),
+                  posttx_responder_up = gsea_lister(rank_list = deg_ranks, sig_list = zhao_responder_posttx_dn, sig_name = 'POST-TX_UP')
+)
+```
+
+```{r}
+zhao_enrichments %>% bind_rows() %>% filter(padj < 0.05)
+```
+
+
+```{r include=FALSE}
+# set up themes for ggplotting
+theme <- theme(text = element_text(size=16),
+               axis.text.y = element_text(size=18, face='bold'),
+               axis.text.x = element_text(size=18, face='bold'),
+               axis.title = element_text(size=20, face = "bold"),
+               legend.text= element_text(size=18),
+               legend.title= element_text(size=24, face='bold'),
+               strip.text=element_text(size=24, face='bold'),
+               plot.title=element_text(size=28, face='bold'))
+
+```
+
+
+
+```{r}
+znmed_list <- lapply(zhao_enrichments, function(x){
+  x$sample_comparison <- factor(x$sample_comparison, levels=names(deg_ranks))
+  df <- x %>% filter(padj < 0.05)
+  
+  plot <- ggplot(data=df) +
+  aes(x=sample_comparison, y=pathway, fill=as.numeric(NES)) +
+  geom_tile(color='white', size=1) +
+  theme_classic() +
+  theme + theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  scale_x_discrete(drop=FALSE) +
+  labs(x ='', y=levels(as.factor(x$signature_name))) +
+  scale_fill_gradient2(low = "lightseagreen", mid='white', high = "tomato", name="NES")  +
+  guides(fill = guide_colourbar(barwidth = 1.5, barheight = 25)) 
+  return(plot)
+})
+
+znmed_list[[4]] <- znmed_list[[4]] + theme_classic() + theme + rotate_x_text(angle=45)
+
+zhao_hm <- ggarrange(plotlist=znmed_list, nrow=length(znmed_list), align='v',  common.legend=TRUE, legend='right', heights=c(4,1,1,1.7))
+```
+
+```{r  fig.height=10, fig.width=7}
+zhao_hm
+```
+
+```{r fig.height=18, fig.width=34}
+#pdf('../../figures/Sfig3_tcga_zhao_ext.pdf', height=18, width=34)
+grid.arrange(zhao_hm, gene_pca, ncol=2, widths=c(1, 1.5))
+#dev.off()
 ```
 
 

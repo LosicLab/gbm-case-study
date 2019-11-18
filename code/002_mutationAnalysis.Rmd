@@ -14,7 +14,7 @@ output:
 
 # Set up
 ```{r include=FALSE}
-libs <- c('tidyverse', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'GenomicRanges', 'sciClone', 'clonevol', 'reshape2')
+libs <- c('tidyverse', 'ggrepel', 'org.Hs.eg.db', 'AnnotationDbi', 'RColorBrewer', 'ggpubr', 'GenomicRanges', 'reshape2')
 lapply(libs, library, character.only=TRUE)
 rm(libs)
 ```
